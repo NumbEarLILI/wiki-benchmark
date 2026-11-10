@@ -6,6 +6,7 @@ import type {
   DatasetSummary,
   ItemResult,
   LeaderboardEntry,
+  McpToolInfo,
   Run,
   ScoreWeights,
   Settings,
@@ -33,6 +34,8 @@ export const api = {
   deleteConnector: (id: string) => req('DELETE', `/api/connectors/${id}`),
   testConnector: (body: { id?: string; type: string; config: Record<string, unknown>; question: string }) =>
     req<TestResult>('POST', '/api/connectors/test', body),
+  mcpTools: (body: { id?: string; config: Record<string, unknown> }) =>
+    req<{ ok: boolean; error?: string; tools: McpToolInfo[] }>('POST', '/api/connectors/mcp-tools', body),
 
   datasets: () => req<DatasetSummary[]>('GET', '/api/datasets'),
   dataset: (id: string) => req<Dataset>('GET', `/api/datasets/${id}`),

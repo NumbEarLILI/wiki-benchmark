@@ -7,6 +7,23 @@ export interface FieldDef {
   help?: string;
   default?: string | number;
   options?: { label: string; value: string }[];
+  showIf?: { key: string; values: string[] };
+}
+
+export interface TraceStep {
+  type: 'tool' | 'llm';
+  name: string;
+  args?: unknown;
+  output?: string;
+  latencyMs: number;
+  error?: string;
+}
+
+export interface McpToolInfo {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+  suggestedArgs: string;
 }
 
 export interface AdapterInfo {
@@ -99,6 +116,7 @@ export interface ItemResult {
   relevantFlags: boolean[];
   metrics: ItemMetrics;
   judgeReason?: string;
+  trace?: TraceStep[];
 }
 
 export type RunStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
@@ -149,6 +167,7 @@ export interface LeaderboardEntry {
 
 export interface Settings {
   judge: { enabled: boolean; baseUrl: string; apiKey: string; model: string };
+  agent: { baseUrl: string; apiKey: string; model: string };
   weights: ScoreWeights;
   latencyTargetMs: number;
   latencyMaxMs: number;
@@ -160,5 +179,6 @@ export interface TestResult {
   error?: string;
   answer?: string;
   contexts?: RetrievedContext[];
+  trace?: TraceStep[];
   raw?: unknown;
 }

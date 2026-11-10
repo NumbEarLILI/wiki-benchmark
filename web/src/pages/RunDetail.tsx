@@ -6,6 +6,7 @@ import { duration, fmtTime, METRICS, ms, pct, score, scoreTone, STATUS, useAsync
 import type { AggregateMetrics, DatasetItem, ItemMetrics, ItemResult, Run, ScoreWeights } from '../types';
 import { Badge, Button, Card, ErrorBox, Field, Input, Modal, PageHeader, Progress, ScoreRing, Select, Tabs, cx } from '../components/ui';
 import { LatencyBars, RadarCompare, ScoreBars } from '../components/charts';
+import { TraceView } from '../components/Trace';
 
 function itemAnswerScore(m: ItemMetrics): number | undefined {
   if (m.judgeCorrectness !== undefined) return m.judgeCorrectness;
@@ -62,6 +63,7 @@ export function ResultDetail({ result, item }: { result: ItemResult; item?: Data
           {!result.contexts.length && <div className="text-xs text-slate-400">（未返回召回片段）</div>}
         </div>
       </div>
+      <TraceView trace={result.trace} />
     </div>
   );
 }

@@ -4,10 +4,12 @@
 
 ## 功能
 
-- **知识库接入**：内置 6 类适配器，表单驱动配置，支持在线连通性测试与原始响应查看
+- **知识库接入**：内置 8 类适配器，表单驱动配置，支持在线连通性测试、原始响应与工具调用轨迹查看
   | 类型 | 对接方式 |
   | --- | --- |
   | 内置演示知识库 | 本地 BM25（虚构的「星云云」产品文档），可调噪声与延迟，用于体验流程或作基线 |
+  | MCP 服务 | Streamable HTTP / SSE / WebSocket / stdio 四种传输；**直连模式**调用指定检索工具（可一键获取工具列表并按 inputSchema 生成参数模板），**Agent 模式**由 LLM 自主选择工具作答 |
+  | Skill 技能包 | Agent Skill 规范（`SKILL.md` + 参考资料 / 脚本），支持单个技能或技能目录；**Agent 模式**由 LLM 按技能说明读文件、检索、（可选）执行脚本后作答，**检索模式**无需 LLM 直接评估资料可检索性 |
   | Dify | 应用对话 `chat-messages`（引用和归属）或知识库检索 `datasets/{id}/retrieve` |
   | RAGFlow | 检索 `/api/v1/retrieval` 或聊天助手 `/api/v1/chats/{id}/completions` |
   | FastGPT | 应用对话 `/api/v1/chat/completions`（`detail=true` 返回引用）或知识库搜索测试 |
@@ -40,6 +42,14 @@ npm start            # http://localhost:8787
 
 数据保存在 `server/data/db.json`（可通过 `DATA_DIR` 修改），知识库密钥在接口返回时会脱敏。
 
+## MCP 与 Skill 接入说明
+
+- **结果映射**：MCP 工具返回的 `text` 内容若为 JSON，会自动识别 `results / chunks / documents / records …` 列表及 `content / text / title / source / score …` 字段；也可手动填写路径。`resource` 类型内容会作为召回片段，来源取资源 URI。
+- **Agent 模型**：MCP Agent 模式与 Skill Agent 模式需要一个支持函数调用的 OpenAI 兼容模型。可在接入配置中单独指定，或在「评分设置 → 默认 Agent 模型」统一配置。Agent 调用工具时读取到的内容会作为召回片段参与检索指标计算，完整轨迹在逐题结果中可见。
+- **内置演示**：服务自身在 `/demo/mcp` 暴露了一个演示 MCP 知识库（Streamable HTTP）；stdio 方式可用命令 `npx tsx server/src/demo/mcp-stdio.ts` 启动。演示技能位于 `server/demo/skills/star-cloud-docs/`。
+- **安全提示**：stdio 传输会在服务端启动所配置的命令，Skill 的「允许执行脚本」会在服务端运行技能脚本，请仅用于可信的服务与技能。Skill 的文件读取被限制在技能目录内。
+- **得分可比性**：仅检索的接入（如 MCP 直连检索工具、Skill 检索模式）没有答案得分，综合分只由检索与性能加权得出，排行榜中会标注「仅检索」。
+
 ## 测评集格式
 
 ```json
@@ -61,7 +71,7 @@ npm start            # http://localhost:8787
 
 ## 扩展新的知识库
 
-在 `server/src/adapters/` 下实现 `AdapterDefinition`（声明配置字段 `fields` 与 `query()`，返回 `{ answer?, contexts[] }`），并在 `adapters/index.ts` 中注册，前端表单会根据字段定义自动生成。
+在 `server/src/adapters/` 下实现 `AdapterDefinition`（声明配置字段 `fields` 与 `query()`，返回 `{ answer?, contexts[], trace? }`），并在 `adapters/index.ts` 中注册，前端表单会根据字段定义自动生成（字段可用 `showIf` 按其它字段取值显示）。需要 LLM 自主调用工具的接入可复用 `server/src/agent.ts` 中的 `runAgent`。
 
 ## 目录结构
 
@@ -73,6 +83,6 @@ web/      React + Vite + Tailwind + Recharts 前端
 ## 测试
 
 ```bash
-npm test             # 指标、分词、数据导入、适配器字段映射等单元测试
+npm test             # 指标、分词、数据导入、字段映射单元测试；MCP（HTTP / SSE / stdio）、Agent 循环与 Skill 集成测试
 npm run typecheck
 ```

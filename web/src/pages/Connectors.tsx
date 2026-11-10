@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Database, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react';
+import { CheckCircle2, Database, ListTree, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react';
 import { api } from '../api';
 import { ms, useAsync } from '../lib';
-import type { AdapterInfo, Connector, FieldDef, TestResult } from '../types';
+import type { AdapterInfo, Connector, FieldDef, McpToolInfo, TestResult } from '../types';
+import { TraceView } from '../components/Trace';
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Textarea, cx } from '../components/ui';
 
 function defaultsFor(adapter?: AdapterInfo) {
@@ -11,6 +12,71 @@ function defaultsFor(adapter?: AdapterInfo) {
     if (f.default !== undefined) cfg[f.key] = f.default;
   });
   return cfg;
+}
+
+export function isFieldVisible(field: FieldDef, adapter: AdapterInfo | undefined, config: Record<string, unknown>) {
+  if (!field.showIf) return true;
+  const dep = adapter?.fields.find((f) => f.key === field.showIf!.key);
+  const v = config[field.showIf.key] ?? dep?.default ?? '';
+  return field.showIf.values.includes(String(v));
+}
+
+function connectorSummary(c: Connector): string {
+  const cfg = c.config;
+  if (c.type === 'mock') return `noise=${cfg.noise} latency=${cfg.latencyMs}ms`;
+  if (c.type === 'mcp') {
+    const target = cfg.transport === 'stdio' ? `${cfg.command ?? ''} ${cfg.args ?? ''}`.trim() : String(cfg.url ?? '');
+    return `${cfg.transport ?? 'streamable-http'} · ${cfg.mode === 'agent' ? 'agent' : String(cfg.toolName ?? '')} · ${target}`;
+  }
+  if (c.type === 'skill') return `${cfg.mode === 'retrieval' ? '检索' : 'Agent'} · ${String(cfg.skillPath ?? '')}`;
+  return String(cfg.baseUrl ?? cfg.url ?? '—');
+}
+
+function McpToolsPanel({ connectorId, config, onPick }: { connectorId?: string; config: Record<string, unknown>; onPick: (t: McpToolInfo) => void }) {
+  const [tools, setTools] = useState<McpToolInfo[]>();
+  const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  const agent = config.mode === 'agent';
+  const load = async () => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const r = await api.mcpTools({ id: connectorId, config });
+      setTools(r.tools);
+      if (!r.ok) setError(r.error);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <div className="mt-6 border-t border-slate-100 pt-5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-medium text-slate-700">MCP 工具{agent ? '（Agent 将从中自主选择）' : '（点击选择要评测的工具）'}</span>
+        <Button size="sm" onClick={load} loading={loading}><ListTree className="size-3.5" />获取工具列表</Button>
+      </div>
+      {error && <ErrorBox>{error}</ErrorBox>}
+      {tools && !tools.length && !error && <div className="text-xs text-slate-500">该服务没有暴露工具</div>}
+      <div className="grid gap-2 sm:grid-cols-2">
+        {tools?.map((t) => {
+          const active = !agent && config.toolName === t.name;
+          return (
+            <button
+              key={t.name}
+              disabled={agent}
+              onClick={() => onPick(t)}
+              className={cx('rounded-lg p-2.5 text-left ring-1 transition', active ? 'bg-indigo-50 ring-2 ring-indigo-500' : 'ring-slate-200', !agent && 'hover:ring-slate-300')}
+            >
+              <div className="font-mono text-xs font-semibold text-slate-900">{t.name}</div>
+              <div className="mt-0.5 line-clamp-2 text-[11px] text-slate-500">{t.description || '—'}</div>
+              <div className="mt-1 truncate font-mono text-[10px] text-slate-400">{Object.keys((t.inputSchema?.properties as object) ?? {}).join(', ') || '无参数'}</div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function ConfigField({ field, value, onChange }: { field: FieldDef; value: unknown; onChange: (v: unknown) => void }) {
@@ -67,6 +133,7 @@ export function TestPanel({ result }: { result?: TestResult }) {
               </div>
             ))}
           </div>
+          {result.trace && <div className="mt-3"><TraceView trace={result.trace} /></div>}
           <button className="mt-3 text-xs font-medium text-indigo-600" onClick={() => setShowRaw(!showRaw)}>{showRaw ? '收起' : '查看'}原始响应</button>
           {showRaw && <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-slate-900 p-3 text-[11px] text-slate-100 scrollbar-thin">{JSON.stringify(result.raw, null, 2)}</pre>}
         </>
@@ -117,7 +184,7 @@ function ConnectorModal({ open, onClose, adapters, editing, onSaved }: { open: b
   };
 
   const submit = async () => {
-    const missing = adapter?.fields.filter((f) => f.required && (config[f.key] === undefined || config[f.key] === ''));
+    const missing = adapter?.fields.filter((f) => f.required && isFieldVisible(f, adapter, config) && (config[f.key] === undefined || config[f.key] === ''));
     if (!name.trim()) return setError('请填写名称');
     if (missing?.length) return setError(`请填写：${missing.map((f) => f.label).join('、')}`);
     setSaving(true);
@@ -147,7 +214,7 @@ function ConnectorModal({ open, onClose, adapters, editing, onSaved }: { open: b
         </>
       }
     >
-      <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {adapters.map((a) => (
           <button
             key={a.type}
@@ -162,12 +229,15 @@ function ConnectorModal({ open, onClose, adapters, editing, onSaved }: { open: b
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="名称" required><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：客服知识库 · Dify 生产环境" /></Field>
         <Field label="备注"><Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="版本、模型、切片策略等" /></Field>
-        {adapter?.fields.map((f) => (
+        {adapter?.fields.filter((f) => isFieldVisible(f, adapter, config)).map((f) => (
           <div key={f.key} className={f.type === 'textarea' || f.type === 'json' ? 'sm:col-span-2' : ''}>
             <ConfigField field={f} value={config[f.key]} onChange={(v) => setConfig((c) => ({ ...c, [f.key]: v }))} />
           </div>
         ))}
       </div>
+      {type === 'mcp' && (
+        <McpToolsPanel connectorId={editing?.id} config={config} onPick={(t) => setConfig((c) => ({ ...c, toolName: t.name, argsTemplate: t.suggestedArgs }))} />
+      )}
       <div className="mt-6 border-t border-slate-100 pt-5">
         <div className="mb-2 text-xs font-medium text-slate-700">连通性测试</div>
         <div className="flex gap-2">
@@ -223,7 +293,7 @@ export default function Connectors() {
             </div>
             <p className="mt-3 line-clamp-2 min-h-8 text-xs text-slate-500">{c.description || '—'}</p>
             <div className="mt-3 truncate rounded-md bg-slate-50 px-2 py-1.5 font-mono text-[11px] text-slate-500">
-              {String(c.config.baseUrl ?? c.config.url ?? (c.type === 'mock' ? `noise=${c.config.noise} latency=${c.config.latencyMs}ms` : '—'))}
+              {connectorSummary(c)}
             </div>
           </div>
         ))}

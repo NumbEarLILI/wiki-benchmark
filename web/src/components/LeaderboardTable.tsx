@@ -34,7 +34,11 @@ export function LeaderboardTable({ rows, compact }: { rows: LeaderboardEntry[]; 
               </td>
               <td className="py-3 pr-3">
                 <Link to={`/runs/${r.runId}`} className="font-medium text-slate-900 hover:text-indigo-600">{r.connectorName}</Link>
-                <div className="mt-0.5"><Badge>{r.connectorType}</Badge></div>
+                <div className="mt-0.5 flex gap-1">
+                  <Badge>{r.connectorType}</Badge>
+                  {r.metrics.answerScore === undefined && <Badge tone="blue">仅检索</Badge>}
+                  {r.metrics.retrievalScore === undefined && <Badge tone="green">仅问答</Badge>}
+                </div>
               </td>
               {!compact && <td className="py-3 pr-3 text-slate-600">{r.datasetName}</td>}
               <td className={cx('py-3 pr-3 text-right text-base font-semibold tabular-nums', scoreTone(r.metrics.overallScore))}>{score(r.metrics.overallScore)}</td>

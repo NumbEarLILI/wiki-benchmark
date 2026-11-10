@@ -71,6 +71,15 @@ export default function SettingsPage() {
           </div>
         </Card>
 
+        <Card title="默认 Agent 模型" className="lg:col-span-2">
+          <p className="mb-4 text-xs text-slate-500">MCP 服务（Agent 模式）与 Skill 技能包（Agent 模式）需要一个支持函数调用（tools）的 OpenAI 兼容模型来自主调用工具。接入配置中未单独填写模型时使用这里的设置。</p>
+          <div className="grid gap-3 md:grid-cols-3">
+            <Field label="Base URL"><Input value={s.agent.baseUrl} onChange={(e) => setS({ ...s, agent: { ...s.agent, baseUrl: e.target.value } })} /></Field>
+            <Field label="API Key"><Input type="password" autoComplete="off" value={s.agent.apiKey} onChange={(e) => setS({ ...s, agent: { ...s.agent, apiKey: e.target.value } })} /></Field>
+            <Field label="模型"><Input value={s.agent.model} onChange={(e) => setS({ ...s, agent: { ...s.agent, model: e.target.value } })} /></Field>
+          </div>
+        </Card>
+
         <Card title="评分口径说明" className="lg:col-span-2">
           <div className="grid gap-6 text-xs leading-relaxed text-slate-600 md:grid-cols-3">
             <div>

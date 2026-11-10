@@ -51,7 +51,7 @@ export default function App() {
           ))}
         </nav>
         <div className="m-3 rounded-lg bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-500">
-          支持 Dify、RAGFlow、FastGPT、OpenAI 兼容接口与自定义 HTTP 服务。
+          支持 MCP 服务、Agent Skill 技能包、Dify、RAGFlow、FastGPT、OpenAI 兼容接口与自定义 HTTP 服务。
         </div>
       </aside>
 
