@@ -12,6 +12,7 @@ export interface DB {
 
 export const defaultSettings: Settings = {
   judge: { enabled: false, baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-4o-mini' },
+  agent: { baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-4o-mini' },
   weights: { retrieval: 0.4, answer: 0.4, performance: 0.2 },
   latencyTargetMs: 1500,
   latencyMaxMs: 15000,
@@ -31,7 +32,7 @@ export function now() {
 function load(): DB | null {
   try {
     const raw = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) as DB;
-    raw.settings = { ...defaultSettings, ...raw.settings, judge: { ...defaultSettings.judge, ...raw.settings?.judge } };
+    raw.settings = { ...defaultSettings, ...raw.settings, judge: { ...defaultSettings.judge, ...raw.settings?.judge }, agent: { ...defaultSettings.agent, ...raw.settings?.agent } };
     return raw;
   } catch {
     return null;

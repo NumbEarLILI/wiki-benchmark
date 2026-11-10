@@ -55,6 +55,7 @@ export async function evaluateItem(
     const res = await adapter.query(connector.config, item.question, { topK: run.params.topK, signal: t.signal });
     base.latencyMs = Math.round(performance.now() - started);
     base.answer = res.answer;
+    if (res.trace?.length) base.trace = res.trace;
     base.contexts = (res.contexts ?? []).map((c) => ({ ...c, content: String(c.content ?? '').slice(0, 4000) }));
   } catch (e) {
     base.latencyMs = Math.round(performance.now() - started);

@@ -24,10 +24,10 @@ export const ragflowAdapter: AdapterDefinition = {
         { label: '聊天助手（检索 + 生成）', value: 'chat' },
       ],
     },
-    { key: 'datasetIds', label: '知识库 ID', type: 'text', help: '检索模式必填，多个用逗号分隔' },
-    { key: 'chatId', label: '聊天助手 ID', type: 'text', help: '聊天模式必填' },
-    { key: 'similarityThreshold', label: '相似度阈值', type: 'number', default: 0.2 },
-    { key: 'vectorWeight', label: '向量相似度权重', type: 'number', default: 0.3 },
+    { key: 'datasetIds', label: '知识库 ID', type: 'text', help: '检索模式必填，多个用逗号分隔', showIf: { key: 'mode', values: ['retrieval'] } },
+    { key: 'chatId', label: '聊天助手 ID', type: 'text', help: '聊天模式必填', showIf: { key: 'mode', values: ['chat'] } },
+    { key: 'similarityThreshold', label: '相似度阈值', type: 'number', default: 0.2, showIf: { key: 'mode', values: ['retrieval'] } },
+    { key: 'vectorWeight', label: '向量相似度权重', type: 'number', default: 0.3, showIf: { key: 'mode', values: ['retrieval'] } },
   ],
   async query(config, question, { topK, signal }) {
     const base = trimSlash(config.baseUrl);

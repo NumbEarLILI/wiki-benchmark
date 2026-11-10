@@ -19,7 +19,7 @@ export const difyAdapter: AdapterDefinition = {
       ],
     },
     { key: 'apiKey', label: 'API Key', type: 'password', required: true, help: '应用模式使用应用 API Key；检索模式使用知识库 API Key' },
-    { key: 'datasetId', label: '知识库 ID', type: 'text', help: '仅检索模式需要' },
+    { key: 'datasetId', label: '知识库 ID', type: 'text', help: '仅检索模式需要', showIf: { key: 'mode', values: ['dataset'] } },
     {
       key: 'searchMethod',
       label: '检索方式',
@@ -31,6 +31,7 @@ export const difyAdapter: AdapterDefinition = {
         { label: '全文检索', value: 'full_text_search' },
       ],
       help: '仅检索模式生效',
+      showIf: { key: 'mode', values: ['dataset'] },
     },
   ],
   async query(config, question, { topK, signal }) {

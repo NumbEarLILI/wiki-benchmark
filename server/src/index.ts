@@ -8,6 +8,8 @@ import { db, isFreshDb, newId, now, save } from './store.js';
 import { cancelRun, evaluateItem, executeRun, recomputeSummaries, recoverRuns } from './runner.js';
 import { normalizeItem, parseDatasetText } from './dataset-io.js';
 import { demoDatasetItems } from './seed.js';
+import { closeAllMcpClients, listMcpTools } from './adapters/mcp.js';
+import { handleDemoMcp } from './demo/mcp-server.js';
 import type { Connector, Dataset, DatasetItem, Run, ScoreWeights } from './types.js';
 
 const app = express();
@@ -107,6 +109,24 @@ app.post(
     }
   }),
 );
+
+/** 获取 MCP 服务的工具列表及推荐参数模板 */
+app.post(
+  '/api/connectors/mcp-tools',
+  wrap(async (req, res) => {
+    const { id, config } = req.body ?? {};
+    const existing = id ? db.connectors.find((x) => x.id === id) : undefined;
+    const cfg = config ? unmask('mcp', config, existing?.type === 'mcp' ? existing?.config : undefined) : existing?.config ?? {};
+    try {
+      res.json({ ok: true, tools: await listMcpTools(cfg, 0) });
+    } catch (e) {
+      res.json({ ok: false, error: (e as Error).message, tools: [] });
+    }
+  }),
+);
+
+/** 内置演示 MCP 知识库（Streamable HTTP） */
+app.all('/demo/mcp', wrap(handleDemoMcp));
 
 // ---------- 测评集 ----------
 const datasetSummary = ({ items, ...d }: Dataset) => ({
@@ -315,9 +335,13 @@ app.get('/api/stats', (_req, res) => {
 });
 
 // ---------- 设置 ----------
-app.get('/api/settings', (_req, res) => {
-  res.json({ ...db.settings, judge: { ...db.settings.judge, apiKey: maskValue(db.settings.judge.apiKey) } });
+const publicSettings = () => ({
+  ...db.settings,
+  judge: { ...db.settings.judge, apiKey: maskValue(db.settings.judge.apiKey) },
+  agent: { ...db.settings.agent, apiKey: maskValue(db.settings.agent.apiKey) },
 });
+
+app.get('/api/settings', (_req, res) => res.json(publicSettings()));
 
 app.put('/api/settings', (req, res) => {
   const body = req.body ?? {};
@@ -325,11 +349,15 @@ app.put('/api/settings', (req, res) => {
     const apiKey = typeof body.judge.apiKey === 'string' && body.judge.apiKey.startsWith(MASK) ? db.settings.judge.apiKey : body.judge.apiKey;
     db.settings.judge = { ...db.settings.judge, ...body.judge, apiKey: apiKey ?? db.settings.judge.apiKey };
   }
+  if (body.agent) {
+    const apiKey = typeof body.agent.apiKey === 'string' && body.agent.apiKey.startsWith(MASK) ? db.settings.agent.apiKey : body.agent.apiKey;
+    db.settings.agent = { ...db.settings.agent, ...body.agent, apiKey: apiKey ?? db.settings.agent.apiKey };
+  }
   if (body.weights) db.settings.weights = { ...db.settings.weights, ...body.weights };
   if (body.latencyTargetMs !== undefined) db.settings.latencyTargetMs = Number(body.latencyTargetMs);
   if (body.latencyMaxMs !== undefined) db.settings.latencyMaxMs = Number(body.latencyMaxMs);
   save();
-  res.json({ ...db.settings, judge: { ...db.settings.judge, apiKey: maskValue(db.settings.judge.apiKey) } });
+  res.json(publicSettings());
 });
 
 // ---------- 静态资源（生产模式） ----------
@@ -345,6 +373,9 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 // ---------- 初始化演示数据 ----------
+const port = Number(process.env.PORT) || 8787;
+const DEMO_SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../demo/skills/star-cloud-docs');
+
 function seed() {
   const ds: Dataset = {
     id: newId('ds'),
@@ -363,13 +394,33 @@ function seed() {
     mk('演示库 B · 中等质量', '30% 召回噪声', { noise: 0.3, latencyMs: 900, answerMode: 'extractive' }),
     mk('演示库 C · 低质量', '60% 召回噪声、高延迟', { noise: 0.6, latencyMs: 2500, answerMode: 'extractive' }),
   ];
-  db.connectors.push(...kbs);
+  const mcp: Connector = {
+    id: newId('kb'), name: '演示 MCP 知识库', type: 'mcp', description: '内置演示 MCP 服务（Streamable HTTP），直连 search_knowledge_base 工具',
+    config: { transport: 'streamable-http', url: `http://127.0.0.1:${port}/demo/mcp`, mode: 'direct', toolName: 'search_knowledge_base', argsTemplate: '{"query": "{{question}}", "top_k": {{topK}}}', resultAs: 'contexts' },
+    createdAt: now(), updatedAt: now(),
+  };
+  const skill: Connector = {
+    id: newId('kb'), name: '演示 Skill 技能包', type: 'skill', description: '内置演示技能（SKILL.md + references），检索模式无需 LLM；配置 Agent 模型后可切换为 Agent 模式',
+    config: { skillPath: DEMO_SKILL_DIR, mode: 'retrieval', allowScripts: 'no', maxSteps: 6 },
+    createdAt: now(), updatedAt: now(),
+  };
+  db.connectors.push(...kbs, mcp, skill);
   save(true);
-  createRun({ datasetId: ds.id, connectorIds: kbs.map((k) => k.id), topK: 5, concurrency: 6, name: '演示评测：三个演示知识库对比' });
+  createRun({ datasetId: ds.id, connectorIds: [...kbs, mcp, skill].map((k) => k.id), topK: 5, concurrency: 6, name: '演示评测：多种接入形式对比' });
 }
 
 recoverRuns();
-if (isFreshDb && process.env.NO_SEED !== '1') seed();
 
-const port = Number(process.env.PORT) || 8787;
-app.listen(port, () => console.log(`[kb-benchmark] API listening on http://localhost:${port}`));
+const httpServer = app.listen(port, () => {
+  console.log(`[kb-benchmark] API listening on http://localhost:${port}`);
+  if (isFreshDb && process.env.NO_SEED !== '1') seed();
+});
+
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(sig, async () => {
+    save(true);
+    await closeAllMcpClients();
+    httpServer.close();
+    process.exit(0);
+  });
+}

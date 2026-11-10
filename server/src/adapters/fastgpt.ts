@@ -34,7 +34,7 @@ export const fastgptAdapter: AdapterDefinition = {
         { label: '知识库搜索', value: 'search' },
       ],
     },
-    { key: 'datasetId', label: '知识库 ID', type: 'text', help: '仅搜索模式需要' },
+    { key: 'datasetId', label: '知识库 ID', type: 'text', help: '仅搜索模式需要', showIf: { key: 'mode', values: ['search'] } },
     {
       key: 'searchMode',
       label: '搜索方式',
@@ -45,8 +45,9 @@ export const fastgptAdapter: AdapterDefinition = {
         { label: '语义检索', value: 'embedding' },
         { label: '全文检索', value: 'fullTextRecall' },
       ],
+      showIf: { key: 'mode', values: ['search'] },
     },
-    { key: 'tokenLimit', label: '搜索 Token 上限', type: 'number', default: 5000 },
+    { key: 'tokenLimit', label: '搜索 Token 上限', type: 'number', default: 5000, showIf: { key: 'mode', values: ['search'] } },
   ],
   async query(config, question, { topK, signal }) {
     const base = trimSlash(config.baseUrl);

@@ -4,6 +4,8 @@ import { difyAdapter } from './dify.js';
 import { ragflowAdapter } from './ragflow.js';
 import { fastgptAdapter } from './fastgpt.js';
 import { customHttpAdapter, openaiAdapter } from './custom.js';
+import { mcpAdapter } from './mcp.js';
+import { skillAdapter } from './skill.js';
 import { str } from './http.js';
 
 mockAdapter.resolveCapabilities = (c) => ({ retrieval: true, answer: str(c.answerMode, 'extractive') !== 'none' });
@@ -13,7 +15,16 @@ fastgptAdapter.resolveCapabilities = (c) => ({ retrieval: true, answer: str(c.mo
 openaiAdapter.resolveCapabilities = (c) => ({ retrieval: !!str(c.contextsPath), answer: true });
 customHttpAdapter.resolveCapabilities = (c) => ({ retrieval: !!str(c.contextsPath), answer: !!str(c.answerPath) });
 
-export const adapters: AdapterDefinition[] = [mockAdapter, difyAdapter, ragflowAdapter, fastgptAdapter, openaiAdapter, customHttpAdapter];
+export const adapters: AdapterDefinition[] = [
+  mockAdapter,
+  mcpAdapter,
+  skillAdapter,
+  difyAdapter,
+  ragflowAdapter,
+  fastgptAdapter,
+  openaiAdapter,
+  customHttpAdapter,
+];
 
 export function getAdapter(type: string): AdapterDefinition {
   const a = adapters.find((x) => x.type === type);

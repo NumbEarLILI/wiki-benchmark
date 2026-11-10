@@ -7,6 +7,17 @@ export interface FieldDef {
   help?: string;
   default?: string | number;
   options?: { label: string; value: string }[];
+  /** 仅当另一字段取指定值时显示，例如只在 stdio 传输下显示启动命令 */
+  showIf?: { key: string; values: string[] };
+}
+
+export interface TraceStep {
+  type: 'tool' | 'llm';
+  name: string;
+  args?: unknown;
+  output?: string;
+  latencyMs: number;
+  error?: string;
 }
 
 export interface RetrievedContext {
@@ -19,6 +30,8 @@ export interface RetrievedContext {
 export interface QueryResult {
   answer?: string;
   contexts: RetrievedContext[];
+  /** Agent 类接入（MCP Agent / Skill）的工具调用轨迹 */
+  trace?: TraceStep[];
   raw?: unknown;
 }
 
@@ -82,8 +95,16 @@ export interface ScoreWeights {
   performance: number;
 }
 
+export interface LlmSettings {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
 export interface Settings {
   judge: JudgeSettings;
+  /** Agent 模式（MCP Agent / Skill Agent）默认使用的模型，接入配置中未填写时生效 */
+  agent: LlmSettings;
   weights: ScoreWeights;
   /** 低于该延迟（毫秒）得满分，超过 latencyMaxMs 得 0 分 */
   latencyTargetMs: number;
@@ -116,6 +137,7 @@ export interface ItemResult {
   relevantFlags: boolean[];
   metrics: ItemMetrics;
   judgeReason?: string;
+  trace?: TraceStep[];
 }
 
 export interface AggregateMetrics extends ItemMetrics {

@@ -1,58 +1,27 @@
 import type { AdapterDefinition, RetrievedContext } from '../types.js';
 import { demoDocs } from '../seed.js';
-import { tokenize } from '../text.js';
+import { BM25Index, bm25Terms, splitSentences, type IndexedChunk } from '../bm25.js';
 import { num, str } from './http.js';
 
-interface Chunk {
-  id: string;
-  source: string;
-  content: string;
-  terms: string[];
-}
-
-function terms(text: string): string[] {
-  const t = tokenize(text);
-  const out = [...t];
-  for (let i = 0; i < t.length - 1; i++) out.push(t[i] + t[i + 1]);
-  return out;
-}
-
-function splitSentences(text: string): string[] {
-  return text.split(/(?<=[。！？；])/).map((s) => s.trim()).filter(Boolean);
-}
-
-const chunks: Chunk[] = demoDocs.flatMap((doc) => {
+export const demoChunks: IndexedChunk[] = demoDocs.flatMap((doc) => {
   const sents = splitSentences(doc.content);
-  const out: Chunk[] = [];
+  const out: IndexedChunk[] = [];
   for (let i = 0; i < sents.length; i += 2) {
-    const content = sents.slice(i, i + 2).join('');
-    out.push({ id: `${doc.id}#${i / 2}`, source: doc.title, content, terms: terms(doc.title.replace(/\.md$/, '') + content) });
+    out.push({ id: `${doc.id}#${i / 2}`, source: doc.title, content: sents.slice(i, i + 2).join('') });
   }
   return out;
 });
 
-const avgLen = chunks.reduce((s, c) => s + c.terms.length, 0) / chunks.length;
-const df = new Map<string, number>();
-for (const c of chunks) for (const t of new Set(c.terms)) df.set(t, (df.get(t) ?? 0) + 1);
+export const demoIndex = new BM25Index(demoChunks, (c) => c.source.replace(/\.md$/, '') + c.content);
 
-function bm25(query: string): { chunk: Chunk; score: number }[] {
-  const q = [...new Set(terms(query))];
-  const k1 = 1.2;
-  const b = 0.75;
-  return chunks
-    .map((chunk) => {
-      const tf = new Map<string, number>();
-      for (const t of chunk.terms) tf.set(t, (tf.get(t) ?? 0) + 1);
-      let score = 0;
-      for (const t of q) {
-        const f = tf.get(t);
-        if (!f) continue;
-        const idf = Math.log(1 + (chunks.length - (df.get(t) ?? 0) + 0.5) / ((df.get(t) ?? 0) + 0.5));
-        score += (idf * f * (k1 + 1)) / (f + k1 * (1 - b + (b * chunk.terms.length) / avgLen));
-      }
-      return { chunk, score };
-    })
-    .sort((a, b) => b.score - a.score);
+export function extractiveAnswer(question: string, contexts: { content: string }[]): string {
+  const qTerms = new Set(bm25Terms(question));
+  const best = contexts
+    .slice(0, 2)
+    .flatMap((c) => splitSentences(c.content))
+    .map((s) => ({ s, score: bm25Terms(s).filter((t) => qTerms.has(t)).length }))
+    .sort((a, b) => b.score - a.score)[0];
+  return best?.s ?? '抱歉，知识库中没有找到相关信息。';
 }
 
 function seededRandom(seed: string) {
@@ -99,12 +68,12 @@ export const mockAdapter: AdapterDefinition = {
     const rand = seededRandom(`${question}|${noise}`);
     await sleep(latency * (0.6 + rand() * 0.8), signal);
 
-    const ranked = bm25(question);
-    const picked: Chunk[] = [];
+    const ranked = demoIndex.search(question);
+    const picked: IndexedChunk[] = [];
     for (const { chunk } of ranked) {
       if (picked.length >= topK) break;
       if (rand() < noise) {
-        const r = chunks[Math.floor(rand() * chunks.length)];
+        const r = demoChunks[Math.floor(rand() * demoChunks.length)];
         if (!picked.includes(r)) picked.push(r);
       } else if (!picked.includes(chunk)) {
         picked.push(chunk);
@@ -118,15 +87,7 @@ export const mockAdapter: AdapterDefinition = {
       score: Number((scoreOf.get(c) ?? 0).toFixed(4)),
     }));
 
-    let answer: string | undefined;
-    if (str(config.answerMode, 'extractive') !== 'none') {
-      const qTerms = new Set(terms(question));
-      const sentences = contexts.slice(0, 2).flatMap((c) => splitSentences(c.content));
-      const best = sentences
-        .map((s) => ({ s, score: terms(s).filter((t) => qTerms.has(t)).length }))
-        .sort((a, b) => b.score - a.score)[0];
-      answer = best?.s ?? '抱歉，知识库中没有找到相关信息。';
-    }
+    const answer = str(config.answerMode, 'extractive') !== 'none' ? extractiveAnswer(question, contexts) : undefined;
     return { answer, contexts };
   },
 };
