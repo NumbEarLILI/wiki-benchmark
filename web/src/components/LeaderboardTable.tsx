@@ -4,7 +4,7 @@ import type { LeaderboardEntry } from '../types';
 import { fmtTime, ms, pct, score, scoreTone } from '../lib';
 import { Badge, cx } from './ui';
 
-const medal = ['text-amber-500', 'text-slate-400', 'text-orange-400'];
+const medal = ['text-amber-400', 'text-slate-400', 'text-orange-700'];
 
 export function LeaderboardTable({ rows, compact }: { rows: LeaderboardEntry[]; compact?: boolean }) {
   return (
