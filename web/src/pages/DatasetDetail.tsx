@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Bug, ChevronDown, CloudUpload, Download, ExternalLink, Eye, FileText, Globe2, Pencil, Plus, Puzzle, Search, Trash2 } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
+import { ArrowLeft, Bug, ChevronDown, CloudUpload, Download, ExternalLink, Eye, FileText, Globe2, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import { api } from '../api';
-import { download, fmtNum, fmtTime, useAsync, useJob } from '../lib';
+import { download, fmtNum, fmtTime, useAsync } from '../lib';
 import type { Dataset, DatasetDocument, DatasetItem, ItemResult } from '../types';
-import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Progress, Select, Tabs, Textarea } from '../components/ui';
+import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Tabs, Textarea } from '../components/ui';
+import { PrepareModal } from '../components/PrepareModal';
 import { ResultDetail } from './RunDetail';
 
 const join = (v?: string[]) => (v ?? []).join(' | ');
@@ -143,92 +144,6 @@ function DocModal({ datasetId, docId, creating, onClose, onChanged }: { datasetI
       ) : (
         !error && <div className="py-10 text-center text-sm text-slate-400">加载中…</div>
       )}
-    </Modal>
-  );
-}
-
-function SyncModal({ open, dataset, onClose, onDone }: { open: boolean; dataset: Dataset; onClose: () => void; onDone: () => void }) {
-  const navigate = useNavigate();
-  const connectors = useAsync(api.connectors);
-  const adapters = useAsync(api.adapters);
-  const [connectorId, setConnectorId] = useState('');
-  const [error, setError] = useState<string>();
-  const [skillMsg, setSkillMsg] = useState<string>();
-  const [job, setJob] = useJob(() => onDone());
-  const ingestable = useMemo(() => {
-    const types = new Set((adapters.data ?? []).filter((a) => a.ingest).map((a) => a.type));
-    return (connectors.data ?? []).filter((c) => types.has(c.type));
-  }, [adapters.data, connectors.data]);
-  useEffect(() => {
-    if (open) {
-      setJob(undefined);
-      setError(undefined);
-      setSkillMsg(undefined);
-    }
-  }, [open, setJob]);
-  useEffect(() => {
-    if (!connectorId && ingestable[0]) setConnectorId(ingestable[0].id);
-  }, [ingestable, connectorId]);
-  const running = job?.status === 'running';
-  const start = async () => {
-    setError(undefined);
-    try {
-      setJob(await api.syncDataset(dataset.id, connectorId));
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-  const makeSkill = async () => {
-    setError(undefined);
-    try {
-      const r = await api.createSkill(dataset.id, { createConnector: true });
-      setSkillMsg(`已生成 Skill 目录 ${r.path}，并创建接入「${r.connector?.name}」`);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-  const result = job?.result as { uploaded: number; failed: number; errors: string[] } | undefined;
-  return (
-    <Modal open={open} onClose={running ? () => undefined : onClose} title="把文档集合接入被测知识库">
-      <p className="text-sm leading-relaxed text-slate-600">
-        测评前，被测知识库需要先导入本测评集的 <b>{fmtNum(dataset.documentCount)}</b> 篇文档。文档以 <code className="rounded bg-slate-100 px-1">{'{文档ID}__{标题}.md'}</code> 命名上传，评测时据此精确判定检索命中。
-      </p>
-      <div className="mt-5 space-y-3">
-        <div className="rounded-xl p-4 ring-1 ring-slate-200">
-          <div className="flex items-center gap-2 text-sm font-medium text-slate-900"><CloudUpload className="size-4 text-indigo-500" />自动上传到知识库服务</div>
-          <p className="mt-1 text-xs text-slate-500">支持 Dify、RAGFlow、FastGPT，使用接入配置中的知识库 ID 与 API Key。上传后知识库需要一段时间完成解析与向量化。</p>
-          {ingestable.length ? (
-            <div className="mt-3 flex gap-2">
-              <Select value={connectorId} onChange={(e) => setConnectorId(e.target.value)} disabled={running}>
-                {ingestable.map((c) => <option key={c.id} value={c.id}>{c.name}（{c.type}）</option>)}
-              </Select>
-              <Button variant="primary" loading={running} disabled={!connectorId} onClick={start}>开始上传</Button>
-            </div>
-          ) : (
-            <div className="mt-3 text-xs text-slate-400">暂无支持自动上传的接入，<Link to="/connectors" className="text-indigo-600 hover:underline">去添加 Dify / RAGFlow / FastGPT 接入</Link></div>
-          )}
-          {job && (
-            <div className="mt-3 space-y-1.5">
-              <div className="flex justify-between text-xs text-slate-600"><span>{job.status === 'done' ? `完成：成功 ${result?.uploaded} 篇，失败 ${result?.failed} 篇` : job.status === 'error' ? '上传失败' : job.message}</span><span>{Math.round(job.progress * 100)}%</span></div>
-              <Progress value={job.progress} tone={job.status === 'done' ? 'emerald' : 'indigo'} />
-              {result?.errors?.slice(0, 3).map((e) => <div key={e} className="text-xs text-rose-600">{e}</div>)}
-            </div>
-          )}
-        </div>
-        <div className="rounded-xl p-4 ring-1 ring-slate-200">
-          <div className="flex items-center gap-2 text-sm font-medium text-slate-900"><Puzzle className="size-4 text-indigo-500" />生成 Skill 技能包</div>
-          <p className="mt-1 text-xs text-slate-500">把文档打包为 SKILL.md + references/，并自动创建一个 Skill 接入，用于评测 Agent 读取技能包的效果。</p>
-          <div className="mt-3 flex items-center gap-2">
-            <Button size="sm" onClick={makeSkill}>生成并创建接入</Button>
-            <Button size="sm" variant="ghost" onClick={() => download(api.exportUrl(dataset.id, 'skill-zip'))}><Download className="size-3.5" />下载 ZIP</Button>
-          </div>
-          {skillMsg && <div className="mt-2 text-xs text-emerald-600">{skillMsg} <button className="text-indigo-600 hover:underline" onClick={() => navigate('/connectors')}>查看</button></div>}
-        </div>
-        <div className="rounded-xl bg-slate-50 p-4 text-xs leading-relaxed text-slate-600">
-          <b>其他方式：</b>「本地检索基线（BM25）」接入直接读取测评集文档，无需同步；MCP / 自定义 HTTP 等服务可下载「文档集合 ZIP」后自行导入。
-        </div>
-      </div>
-      {error && <div className="mt-3"><ErrorBox>{error}</ErrorBox></div>}
     </Modal>
   );
 }
@@ -380,7 +295,7 @@ export default function DatasetDetail() {
       <PageHeader
         title={d?.name ?? '加载中…'}
         desc={d?.description}
-        actions={d && <><ExportMenu dataset={d} /><Button onClick={() => setSyncOpen(true)} disabled={!d.documentCount}><CloudUpload className="size-4" />接入知识库</Button><Button variant="primary" onClick={() => setEditing({})}><Plus className="size-4" />添加题目</Button></>}
+        actions={d && <><ExportMenu dataset={d} /><Button onClick={() => setSyncOpen(true)} disabled={!d.documentCount}><CloudUpload className="size-4" />准备知识库</Button><Button variant="primary" onClick={() => setEditing({})}><Plus className="size-4" />添加题目</Button></>}
       />
       {error && <div className="mb-4"><ErrorBox>{error}</ErrorBox></div>}
 
@@ -414,11 +329,16 @@ export default function DatasetDetail() {
               <div className="text-sm font-medium text-slate-900">自建测评集</div>
             )}
             <div className="mt-3 border-t border-slate-100 pt-2">
-              <div className="font-medium text-slate-700">已接入的知识库</div>
+              <div className="font-medium text-slate-700">已准备的知识库</div>
               {d.syncs?.length ? (
-                d.syncs.map((s) => <div key={s.connectorId}>{s.connectorName} · {fmtTime(s.at)} · {s.uploaded} 篇{s.failed ? `（失败 ${s.failed}）` : ''}</div>)
+                d.syncs.map((s) => (
+                  <div key={s.connectorId} title={s.detail}>
+                    {s.connectorName} · {fmtTime(s.at)} · {s.uploaded} 篇{s.failed ? `（失败 ${s.failed}）` : ''}
+                    {s.detail && <div className="truncate text-[11px] text-slate-400">{s.detail}</div>}
+                  </div>
+                ))
               ) : (
-                <div className="text-slate-400">{d.documentCount ? '尚未同步，点击右上角「接入知识库」' : '—'}</div>
+                <div className="text-slate-400">{d.documentCount ? '尚未准备，点击右上角「准备知识库」' : '—'}</div>
               )}
             </div>
           </Card>
@@ -488,7 +408,7 @@ export default function DatasetDetail() {
       <ItemModal item={editing} onClose={() => setEditing(undefined)} onSave={save} hasDocs={!!d?.documentCount} />
       <DebugModal item={debug} datasetId={id} docTitles={titles} onClose={() => setDebug(undefined)} />
       <DocModal datasetId={id} docId={openDoc} creating={creatingDoc} onClose={() => (setOpenDoc(undefined), setCreatingDoc(false))} onChanged={docsChanged} />
-      {d && <SyncModal open={syncOpen} dataset={d} onClose={() => setSyncOpen(false)} onDone={() => ds.reload()} />}
+      <PrepareModal open={syncOpen} datasetId={id} onClose={() => setSyncOpen(false)} onDone={() => ds.reload()} />
     </>
   );
 }

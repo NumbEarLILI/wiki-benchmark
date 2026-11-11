@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { FlaskConical, Plus, Trash2 } from 'lucide-react';
+import { CloudUpload, FlaskConical, Plus, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { duration, fmtTime, STATUS, useAsync, type Async } from '../lib';
 import type { Run } from '../types';
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Progress, Select, cx } from '../components/ui';
+import { PrepareModal } from '../components/PrepareModal';
 
 function NewRunModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
   const datasets = useAsync(api.datasets, [open]);
   const connectors = useAsync(api.connectors, [open]);
+  const adapters = useAsync(api.adapters);
+  const [prepareFor, setPrepareFor] = useState<string>();
   const settings = useAsync(api.settings, [open]);
   const [name, setName] = useState('');
   const [datasetId, setDatasetId] = useState('');
@@ -50,7 +53,7 @@ function NewRunModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     <Modal open={open} onClose={onClose} wide title="新建评测任务" footer={<><Button onClick={onClose}>取消</Button><Button variant="primary" loading={saving} disabled={!datasetId || !selected.length} onClick={submit}>开始评测</Button></>}>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="任务名称"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="留空自动生成" /></Field>
-        <Field label="测评集" required help={ds ? `${ds.itemCount} 题 · ${ds.documentCount} 篇文档 · 带参考答案 ${ds.withAnswer} · 带相关文档 ${ds.withDocs}${ds.documentCount && !ds.syncs?.length ? ' · 提示：文档尚未同步到任何知识库' : ''}` : undefined}>
+        <Field label="测评集" required help={ds ? `${ds.itemCount} 题 · ${ds.documentCount} 篇文档 · 带参考答案 ${ds.withAnswer} · 带相关文档 ${ds.withDocs}` : undefined}>
           <Select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
             {datasets.data?.map((d) => <option key={d.id} value={d.id}>{d.name}（{d.itemCount} 题）</option>)}
           </Select>
@@ -69,10 +72,21 @@ function NewRunModal({ open, onClose }: { open: boolean; onClose: () => void }) 
             {connectors.data.map((c) => (
               <label key={c.id} className={cx('flex cursor-pointer items-center gap-3 rounded-lg p-3 ring-1 transition', selected.includes(c.id) ? 'bg-indigo-50/60 ring-indigo-400' : 'ring-slate-200 hover:ring-slate-300')}>
                 <input type="checkbox" className="size-4 accent-indigo-600" checked={selected.includes(c.id)} onChange={() => toggle(c.id)} />
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-slate-900">{c.name}</div>
                   <div className="text-[11px] text-slate-500">{c.type}{c.capabilities.retrieval ? ' · 检索' : ''}{c.capabilities.answer ? ' · 问答' : ''}</div>
                 </div>
+                {ds && ds.documentCount > 0 && (() => {
+                  const m = adapters.data?.find((a) => a.type === c.type)?.prepare;
+                  if (m === 'none') return <Badge tone="green">无需准备</Badge>;
+                  if (ds.syncs?.some((s) => s.connectorId === c.id)) return <Badge tone="green">已准备</Badge>;
+                  if (m === 'builtin') return <Badge>内置语料</Badge>;
+                  return (
+                    <button className="shrink-0" onClick={(e) => (e.preventDefault(), setPrepareFor(c.id))}>
+                      <Badge tone="amber" className="hover:ring-amber-300"><CloudUpload className="size-3" />未准备</Badge>
+                    </button>
+                  );
+                })()}
               </label>
             ))}
           </div>
@@ -95,6 +109,7 @@ function NewRunModal({ open, onClose }: { open: boolean; onClose: () => void }) 
         </div>
       </label>
       {error && <div className="mt-4"><ErrorBox>{error}</ErrorBox></div>}
+      <PrepareModal open={!!prepareFor} datasetId={datasetId} connectorId={prepareFor} onClose={() => setPrepareFor(undefined)} onDone={() => datasets.reload()} />
     </Modal>
   );
 }
@@ -103,6 +118,7 @@ export default function Runs() {
   const [params, setParams] = useSearchParams();
   const runs: Async<Run[]> = useAsync(api.runs, [], () => (runs.data?.some((r) => r.status === 'running' || r.status === 'pending') ? 1500 : 0));
   const open = params.get('new') === '1';
+  const [preparing, setPreparing] = useState(false);
 
   const remove = async (id: string) => {
     if (!confirm('删除该评测任务及其结果？')) return;
@@ -112,7 +128,12 @@ export default function Runs() {
 
   return (
     <>
-      <PageHeader title="评测任务" desc="选择测评集与多个知识库，在同一组题目上并行跑分。" actions={<Button variant="primary" onClick={() => setParams({ new: '1' })}><Plus className="size-4" />新建评测</Button>} />
+      <PageHeader
+        title="评测任务"
+        desc="先「准备知识库」把测评集文档导入被测知识库，再选择测评集与多个知识库，在同一组题目上并行跑分。"
+        actions={<><Button onClick={() => setPreparing(true)}><CloudUpload className="size-4" />准备知识库</Button><Button variant="primary" onClick={() => setParams({ new: '1' })}><Plus className="size-4" />新建评测</Button></>}
+      />
+      <PrepareModal open={preparing} onClose={() => setPreparing(false)} />
       <Card bodyClass="p-0">
         {runs.data?.length ? (
           <div className="overflow-x-auto">

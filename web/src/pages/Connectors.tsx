@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Database, ListTree, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react';
+import { CheckCircle2, CloudUpload, Database, ListTree, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react';
 import { api } from '../api';
 import { ms, useAsync } from '../lib';
 import type { AdapterInfo, Connector, FieldDef, McpToolInfo, TestResult } from '../types';
 import { TraceView } from '../components/Trace';
+import { PREPARE_LABEL, PrepareModal } from '../components/PrepareModal';
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Textarea, cx } from '../components/ui';
 
 function defaultsFor(adapter?: AdapterInfo) {
@@ -256,6 +257,7 @@ export default function Connectors() {
   const adapters = useAsync(api.adapters);
   const connectors = useAsync(api.connectors);
   const [modal, setModal] = useState<{ open: boolean; editing?: Connector }>({ open: false });
+  const [preparing, setPreparing] = useState<string>();
   const adapterName = (t: string) => adapters.data?.find((a) => a.type === t)?.name ?? t;
 
   const remove = async (c: Connector) => {
@@ -272,6 +274,7 @@ export default function Connectors() {
         actions={<Button variant="primary" onClick={() => setModal({ open: true })}><Plus className="size-4" />接入知识库</Button>}
       />
       {connectors.error && <ErrorBox>{connectors.error}</ErrorBox>}
+      <PrepareModal open={!!preparing} connectorId={preparing} onClose={() => setPreparing(undefined)} onDone={() => connectors.reload()} />
       {connectors.data && !connectors.data.length && (
         <Card><Empty icon={<Database className="size-5" />} title="还没有接入知识库" action={<Button variant="primary" onClick={() => setModal({ open: true })}>接入第一个知识库</Button>} /></Card>
       )}
@@ -285,7 +288,10 @@ export default function Connectors() {
                   <Badge tone="indigo">{adapterName(c.type)}</Badge>
                   {c.capabilities.retrieval && <Badge tone="blue">检索</Badge>}
                   {c.capabilities.answer && <Badge tone="green">问答</Badge>}
-                  {adapters.data?.find((a) => a.type === c.type)?.ingest && <Badge tone="amber">可同步文档</Badge>}
+                  {(() => {
+                    const m = adapters.data?.find((a) => a.type === c.type)?.prepare;
+                    return m === 'api' || m === 'llm' ? <Badge tone="amber">{m === 'llm' ? '大模型准备' : '可上传文档'}</Badge> : null;
+                  })()}
                 </div>
               </div>
               <div className="flex gap-1 opacity-60 transition group-hover:opacity-100">
@@ -296,6 +302,10 @@ export default function Connectors() {
             <p className="mt-3 line-clamp-2 min-h-8 text-xs text-slate-500">{c.description || '—'}</p>
             <div className="mt-3 truncate rounded-md bg-slate-50 px-2 py-1.5 font-mono text-[11px] text-slate-500">
               {connectorSummary(c)}
+            </div>
+            <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
+              <span className="text-[11px] text-slate-400">文档准备：{PREPARE_LABEL[adapters.data?.find((a) => a.type === c.type)?.prepare ?? 'manual']}</span>
+              <Button size="sm" onClick={() => setPreparing(c.id)}><CloudUpload className="size-3.5" />准备数据</Button>
             </div>
           </div>
         ))}

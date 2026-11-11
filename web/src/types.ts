@@ -33,6 +33,30 @@ export interface AdapterInfo {
   capabilities: ('retrieval' | 'answer')[];
   fields: FieldDef[];
   ingest: boolean;
+  prepare: PrepareMethod;
+}
+
+export type PrepareMethod = 'api' | 'llm' | 'none' | 'builtin' | 'manual';
+
+export interface IngestPlan {
+  kind: 'mcp-tool' | 'skill-script' | 'skill-files';
+  toolName?: string;
+  script?: string;
+  argsTemplate?: string;
+  stdinTemplate?: string;
+  dir?: string;
+  finalize?: { toolName: string; argsTemplate: string };
+  reasoning: string;
+  source: 'llm' | 'heuristic' | 'manual';
+}
+
+export interface PrepareTestResult {
+  ok: boolean;
+  docId: string;
+  fileName?: string;
+  output?: string;
+  error?: string;
+  latencyMs: number;
 }
 
 export interface Connector {
@@ -93,6 +117,7 @@ export interface DatasetSyncRecord {
   at: string;
   uploaded: number;
   failed: number;
+  detail?: string;
 }
 
 export interface DatasetSummary {
