@@ -3,7 +3,8 @@ import cors from 'cors';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { adapters, capabilitiesOf, getAdapter } from './adapters/index.js';
+import { adapters, capabilitiesOf, getAdapter, prepareMethodOf } from './adapters/index.js';
+import { parsePlan, planIngest, testPlan, validatePlan, type IngestPlan } from './prepare.js';
 import { DATA_DIR, db, isFreshDb, newId, now, save } from './store.js';
 import { cancelRun, corpusOf, evaluateItem, executeRun, recomputeSummaries, recoverRuns } from './runner.js';
 import { normalizeItem, parseDatasetText } from './dataset-io.js';
@@ -58,7 +59,7 @@ function unmask(type: string, incoming: Record<string, unknown>, existing?: Reco
 
 // ---------- 适配器 ----------
 app.get('/api/adapters', (_req, res) => {
-  res.json(adapters.map(({ query: _q, resolveCapabilities: _r, ingest, ...rest }) => ({ ...rest, ingest: !!ingest })));
+  res.json(adapters.map(({ query: _q, resolveCapabilities: _r, ingest, ...rest }) => ({ ...rest, ingest: !!ingest, prepare: prepareMethodOf(rest.type) })));
 });
 
 // ---------- 知识库接入 ----------
@@ -355,7 +356,66 @@ app.post('/api/datasets/:id/skill', (req, res) => {
   res.json({ path: dir, connector: connector && maskConnector(connector) });
 });
 
-/** 把文档集合导入到被测知识库，保证各家知识库基于同一份语料评测 */
+function planLabel(p?: IngestPlan) {
+  if (!p) return undefined;
+  const how = p.kind === 'mcp-tool' ? `MCP 工具 ${p.toolName}` : p.kind === 'skill-script' ? `技能脚本 ${p.script}` : `写入技能目录 ${p.dir || 'references'}/`;
+  return `${how}（${{ llm: '大模型解析', heuristic: '规则识别', manual: '手动配置' }[p.source]}）`;
+}
+
+function prepContext(body: any) {
+  const c = db.connectors.find((x) => x.id === body?.connectorId);
+  if (!c) throw new ApiError(404, '知识库不存在');
+  const d = body?.datasetId ? db.datasets.find((x) => x.id === body.datasetId) : undefined;
+  if (body?.datasetId && !d) throw new ApiError(404, '测评集不存在');
+  return { c, d };
+}
+
+function bodyPlan(type: string, raw: unknown): IngestPlan | undefined {
+  if (!raw) return undefined;
+  try {
+    const p = parsePlan(raw);
+    if (p) validatePlan(type, p);
+    return p;
+  } catch (e) {
+    throw new ApiError(400, `上传方案无效：${(e as Error).message}`);
+  }
+}
+
+/** 让大模型阅读 MCP 工具列表 / Skill 说明，生成文档上传方案（不保存） */
+app.post(
+  '/api/prepare/plan',
+  wrap(async (req, res) => {
+    const { c, d } = prepContext(req.body);
+    if (prepareMethodOf(c.type) !== 'llm') throw new ApiError(400, '该类型的知识库不需要解析上传方案');
+    const doc = d?.documents?.[0] ?? { id: 'sample', title: '示例文档', content: '这是一段示例正文。' };
+    try {
+      res.json(await planIngest(c.type, c.config, doc, AbortSignal.timeout(180_000)));
+    } catch (e) {
+      throw new ApiError(400, (e as Error).message);
+    }
+  }),
+);
+
+/** 用方案试传测评集的第一篇文档 */
+app.post(
+  '/api/prepare/test',
+  wrap(async (req, res) => {
+    const { c, d } = prepContext(req.body);
+    const doc = d?.documents?.[0];
+    if (!doc) throw new ApiError(400, '该测评集没有文档集合');
+    const plan = bodyPlan(c.type, req.body?.plan) ?? parsePlan(c.config.ingestPlan);
+    if (!plan) throw new ApiError(400, '请先生成上传方案');
+    const started = performance.now();
+    try {
+      const output = await testPlan(c.type, c.config, plan, doc, AbortSignal.timeout(120_000));
+      res.json({ ok: true, docId: doc.id, fileName: docFileName(doc), output: output.slice(0, 2000), latencyMs: Math.round(performance.now() - started) });
+    } catch (e) {
+      res.json({ ok: false, docId: doc.id, error: (e as Error).message, latencyMs: Math.round(performance.now() - started) });
+    }
+  }),
+);
+
+/** 准备知识库：把文档集合导入到被测知识库，保证各家知识库基于同一份语料评测 */
 app.post('/api/datasets/:id/sync', (req, res) => {
   const d = findDataset(req.params.id);
   const c = db.connectors.find((x) => x.id === req.body?.connectorId);
@@ -363,14 +423,33 @@ app.post('/api/datasets/:id/sync', (req, res) => {
   const adapter = getAdapter(c.type);
   if (!adapter.ingest) throw new ApiError(400, `${adapter.name} 不支持自动导入文档，请导出文档集合后手动上传`);
   if (!d.documents?.length) throw new ApiError(400, '该测评集没有文档集合');
-  const docs = d.documents;
-  const job = startJob('sync', `同步「${d.name}」到「${c.name}」`, async (report) => {
+  const plan = bodyPlan(c.type, req.body?.plan);
+  if (plan) {
+    c.config = { ...c.config, ingestPlan: JSON.stringify(plan) };
+    c.updatedAt = now();
+    save();
+  }
+  const current = parsePlan(c.config.ingestPlan);
+  const skip = new Set<string>(current?.kind === 'skill-files' || !Array.isArray(req.body?.skip) ? [] : req.body.skip.map(String));
+  const docs = d.documents.filter((doc) => !skip.has(doc.id));
+  const total = d.documents.length;
+  const job = startJob('sync', `准备「${c.name}」：导入「${d.name}」的文档`, async (report) => {
+    if (!current && prepareMethodOf(c.type) === 'llm') {
+      report(0, '大模型正在解析上传接口…');
+      const { plan: auto } = await planIngest(c.type, c.config, docs[0]);
+      c.config = { ...c.config, ingestPlan: JSON.stringify(auto) };
+      save();
+    }
     report(0, `准备上传 ${docs.length} 篇文档…`);
-    const r = await adapter.ingest!(c.config, docs, { onProgress: (done, total) => report(done / total, `已上传 ${done} / ${total}`) });
-    d.syncs = [...(d.syncs ?? []).filter((s) => s.connectorId !== c.id), { connectorId: c.id, connectorName: c.name, at: now(), uploaded: r.uploaded, failed: r.failed }];
+    const r = await adapter.ingest!(c.config, docs, { onProgress: (done, n) => report(done / n, `已上传 ${done} / ${n}`) });
+    const used = parsePlan(c.config.ingestPlan);
+    d.syncs = [
+      ...(d.syncs ?? []).filter((s) => s.connectorId !== c.id),
+      { connectorId: c.id, connectorName: c.name, at: now(), uploaded: r.uploaded + (total - docs.length), failed: r.failed, detail: planLabel(used) ?? `${adapter.name} 上传接口` },
+    ];
     save();
     if (!r.uploaded && r.failed) throw new Error(r.errors[0] ?? '全部上传失败');
-    return { ...r };
+    return { ...r, skipped: total - docs.length };
   });
   res.json(job);
 });

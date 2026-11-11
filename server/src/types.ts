@@ -100,6 +100,8 @@ export interface DatasetSyncRecord {
   at: string;
   uploaded: number;
   failed: number;
+  /** 准备方式说明，如「MCP 工具 add_document（大模型解析）」 */
+  detail?: string;
 }
 
 export interface DatasetItem {

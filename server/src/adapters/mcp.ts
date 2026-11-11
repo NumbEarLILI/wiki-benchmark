@@ -143,6 +143,11 @@ export async function listMcpTools(c: Record<string, unknown>, maxAgeMs = 60_000
   });
 }
 
+export async function callMcpTool(c: Record<string, unknown>, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ParsedToolResult> {
+  const res = await withClient(c, (client) => client.callTool({ name, arguments: args }, undefined, { signal, timeout: CALL_TIMEOUT_MS }));
+  return parseToolResult(res);
+}
+
 function tryJson(s: string): unknown {
   const t = s.trim();
   if (!t.startsWith('{') && !t.startsWith('[')) return undefined;

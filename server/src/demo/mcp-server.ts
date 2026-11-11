@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { demoDocs } from '../seed.js';
-import { demoIndex } from '../adapters/mock.js';
+import { demoKb } from './kb-store.js';
 
 /** 演示用 MCP 知识库服务：把内置的星云云文档以 MCP 工具的形式暴露出来 */
 export function createDemoMcpServer() {
@@ -19,7 +19,7 @@ export function createDemoMcpServer() {
       },
     },
     async ({ query, top_k }) => {
-      const results = demoIndex.search(query, top_k ?? 5).map((h) => ({
+      const results = demoKb.search(query, top_k ?? 5).filter((h) => h.score > 0).map((h) => ({
         id: h.chunk.id,
         title: h.chunk.source,
         content: h.chunk.content,
@@ -43,7 +43,24 @@ export function createDemoMcpServer() {
   );
 
   server.registerTool('list_documents', { description: '列出知识库中的全部文档。' }, async () => ({
-    content: [{ type: 'text', text: demoDocs.map((d) => `${d.id}\t${d.title}`).join('\n') }],
+    content: [{ type: 'text', text: [...demoDocs, ...demoKb.list()].map((d) => `${d.id}\t${d.title}`).join('\n') }],
+  }));
+
+  server.registerTool(
+    'add_document',
+    {
+      description: '向知识库新增一篇文档，新增后立即可以被 search_knowledge_base 检索到。',
+      inputSchema: {
+        title: z.string().describe('文档标题或文件名，检索结果的 title 字段会返回它'),
+        content: z.string().describe('文档正文（Markdown 或纯文本）'),
+        doc_id: z.string().optional().describe('可选的文档 ID，相同 ID 会覆盖'),
+      },
+    },
+    async ({ title, content, doc_id }) => ({ content: [{ type: 'text', text: JSON.stringify({ ok: true, id: demoKb.add(title, content, doc_id) }) }] }),
+  );
+
+  server.registerTool('clear_documents', { description: '删除所有通过 add_document 新增的文档（内置文档保留）。' }, async () => ({
+    content: [{ type: 'text', text: JSON.stringify({ ok: true, deleted: demoKb.clear() }) }],
   }));
 
   return server;

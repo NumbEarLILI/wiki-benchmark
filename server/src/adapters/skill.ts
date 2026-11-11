@@ -94,7 +94,11 @@ export function loadSkills(p: string): LoadedSkills {
   return loaded;
 }
 
-function safeJoin(root: string, rel: unknown): string {
+export function invalidateSkillCache(p: string) {
+  cache.delete(resolveSkillRoot(p));
+}
+
+export function safeJoin(root: string, rel: unknown): string {
   const full = path.resolve(root, str(rel).replace(/^\/+/, ''));
   if (full !== root && !full.startsWith(root + path.sep)) throw new Error('路径越界：只能访问技能目录内的文件');
   return full;
@@ -108,6 +112,22 @@ function readText(full: string): string {
 }
 
 const INTERPRETERS: Record<string, string> = { '.py': 'python3', '.js': 'node', '.mjs': 'node', '.sh': 'bash' };
+
+/** 执行技能脚本并返回退出码，供准备知识库时按方案逐篇上传文档 */
+export function execSkillScript(root: string, rel: string, argv: string[], stdin: string | undefined, signal?: AbortSignal): Promise<{ code: number; stdout: string; stderr: string }> {
+  const full = safeJoin(root, rel);
+  if (!fs.existsSync(full)) throw new Error(`脚本不存在：${rel}`);
+  const interp = INTERPRETERS[path.extname(full).toLowerCase()];
+  const [cmd, cmdArgs] = interp ? [interp, [full, ...argv]] : [full, argv];
+  return new Promise((resolve) => {
+    const child = execFile(cmd, cmdArgs, { cwd: path.dirname(full), timeout: 60_000, maxBuffer: 4 * 1024 * 1024, signal }, (err, stdout, stderr) => {
+      const code = err ? (typeof (err as any).code === 'number' ? (err as any).code : 1) : 0;
+      resolve({ code, stdout: String(stdout), stderr: String(stderr || (err && !stdout ? err.message : '')) });
+    });
+    child.stdin?.on('error', () => {});
+    child.stdin?.end(stdin ?? '');
+  });
+}
 
 function runScript(root: string, rel: unknown, args: unknown, signal?: AbortSignal): Promise<string> {
   const full = safeJoin(root, rel);
@@ -226,7 +246,7 @@ export const skillAdapter: AdapterDefinition = {
         { label: '否', value: 'no' },
         { label: '是（脚本将在服务端执行，仅用于可信技能）', value: 'yes' },
       ],
-      showIf: isAgent,
+      help: '对 Agent 调用脚本与「准备知识库」时执行上传脚本均生效',
     },
     { key: 'systemPrompt', label: '附加系统提示词', type: 'textarea', showIf: isAgent },
     ...llmFields(isAgent),

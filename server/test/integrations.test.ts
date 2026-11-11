@@ -111,7 +111,7 @@ describe('MCP adapter', () => {
 
   it('lists tools over streamable HTTP', async () => {
     const tools = await listMcpTools({ transport: 'streamable-http', url: `${base}/mcp` }, 0);
-    expect(tools.map((t) => t.name)).toEqual(['search_knowledge_base', 'get_document', 'list_documents']);
+    expect(tools.map((t) => t.name)).toEqual(['search_knowledge_base', 'get_document', 'list_documents', 'add_document', 'clear_documents']);
     expect(tools[0].suggestedArgs).toBe('{"query": "{{question}}", "top_k": {{topK}}}');
   });
 
