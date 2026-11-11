@@ -2,3 +2,5 @@ node_modules
 dist
 server/data
 *.log
+server/demo/skills/*/references/kb-bench/
+server/demo/skills/*/kb-bench/
