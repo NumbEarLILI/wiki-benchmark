@@ -4,17 +4,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adapters, capabilitiesOf, getAdapter } from './adapters/index.js';
-import { db, isFreshDb, newId, now, save } from './store.js';
-import { cancelRun, evaluateItem, executeRun, recomputeSummaries, recoverRuns } from './runner.js';
+import { DATA_DIR, db, isFreshDb, newId, now, save } from './store.js';
+import { cancelRun, corpusOf, evaluateItem, executeRun, recomputeSummaries, recoverRuns } from './runner.js';
 import { normalizeItem, parseDatasetText } from './dataset-io.js';
-import { demoDatasetItems } from './seed.js';
+import { demoDatasetDocuments, demoDatasetItemsWithIds } from './seed.js';
+import { benchmarkCatalog } from './benchmarks/catalog.js';
+import { importBenchmark } from './benchmarks/importers.js';
+import { importFiles, resolveRelevantDocs } from './benchmarks/files.js';
+import { getJob, startJob } from './jobs.js';
+import { docFileName, docMarkdown, skillFiles, writeSkillDir } from './corpus.js';
+import { createZip } from './zip.js';
+
 import { closeAllMcpClients, listMcpTools } from './adapters/mcp.js';
 import { handleDemoMcp } from './demo/mcp-server.js';
-import type { Connector, Dataset, DatasetItem, Run, ScoreWeights } from './types.js';
+import type { Connector, Dataset, DatasetDocument, DatasetItem, Run, ScoreWeights } from './types.js';
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '100mb' }));
 
 const wrap =
   (fn: (req: Request, res: Response) => unknown) =>
@@ -51,7 +58,7 @@ function unmask(type: string, incoming: Record<string, unknown>, existing?: Reco
 
 // ---------- 适配器 ----------
 app.get('/api/adapters', (_req, res) => {
-  res.json(adapters.map(({ query: _q, resolveCapabilities: _r, ...rest }) => rest));
+  res.json(adapters.map(({ query: _q, resolveCapabilities: _r, ingest, ...rest }) => ({ ...rest, ingest: !!ingest })));
 });
 
 // ---------- 知识库接入 ----------
@@ -129,9 +136,10 @@ app.post(
 app.all('/demo/mcp', wrap(handleDemoMcp));
 
 // ---------- 测评集 ----------
-const datasetSummary = ({ items, ...d }: Dataset) => ({
+const datasetSummary = ({ items, documents, ...d }: Dataset) => ({
   ...d,
   itemCount: items.length,
+  documentCount: documents?.length ?? 0,
   withAnswer: items.filter((i) => i.referenceAnswer).length,
   withDocs: items.filter((i) => i.relevantDocs?.length).length,
   withKeywords: items.filter((i) => i.keywords?.length).length,
@@ -142,21 +150,54 @@ function cleanItems(items: unknown): DatasetItem[] {
   return items.map((i) => normalizeItem(i as Record<string, unknown>)).filter((x): x is DatasetItem => x !== null);
 }
 
-app.get('/api/datasets', (_req, res) => res.json(db.datasets.map(datasetSummary)));
+function cleanDocs(docs: unknown): DatasetDocument[] {
+  if (!Array.isArray(docs)) return [];
+  const seen = new Set<string>();
+  const out: DatasetDocument[] = [];
+  for (const d of docs as any[]) {
+    const content = String(d?.content ?? '').trim();
+    if (!content) continue;
+    let id = String(d.id ?? '').trim() || newId('doc');
+    while (seen.has(id)) id = `${id}-${out.length}`;
+    seen.add(id);
+    out.push({ id, title: String(d.title ?? '').trim() || id, content, url: d.url ? String(d.url) : undefined });
+  }
+  return out;
+}
 
-app.get('/api/datasets/:id', (req, res) => {
-  const d = db.datasets.find((x) => x.id === req.params.id);
+function findDataset(id: string) {
+  const d = db.datasets.find((x) => x.id === id);
   if (!d) throw new ApiError(404, '测评集不存在');
-  res.json(d);
-});
+  return d;
+}
 
-app.post('/api/datasets', (req, res) => {
-  const { name, description, items } = req.body ?? {};
-  if (!name) throw new ApiError(400, '名称必填');
-  const d: Dataset = { id: newId('ds'), name, description, items: cleanItems(items), createdAt: now(), updatedAt: now() };
+/** 详情不返回文档正文，只附带问题所引用文档的标题，文档集合分页获取 */
+function datasetDetail(d: Dataset) {
+  const { documents, ...rest } = d;
+  const docTitles: Record<string, string> = {};
+  if (documents?.length) {
+    const titles = new Map(documents.map((doc) => [doc.id, doc.title]));
+    for (const it of d.items) for (const r of it.relevantDocs ?? []) if (titles.has(r)) docTitles[r] = titles.get(r)!;
+  }
+  return { ...rest, documentCount: documents?.length ?? 0, docTitles };
+}
+
+function addDataset(data: Pick<Dataset, 'name' | 'description' | 'items' | 'documents' | 'source'>): Dataset {
+  const d: Dataset = { id: newId('ds'), ...data, documents: data.documents?.length ? data.documents : undefined, createdAt: now(), updatedAt: now() };
   db.datasets.push(d);
   save();
-  res.json(d);
+  return d;
+}
+
+app.get('/api/datasets', (_req, res) => res.json(db.datasets.map(datasetSummary)));
+
+app.get('/api/datasets/:id', (req, res) => res.json(datasetDetail(findDataset(req.params.id))));
+
+app.post('/api/datasets', (req, res) => {
+  const { name, description, items, documents } = req.body ?? {};
+  if (!name) throw new ApiError(400, '名称必填');
+  const docs = cleanDocs(documents);
+  res.json(datasetDetail(addDataset({ name, description, documents: docs, items: resolveRelevantDocs(cleanItems(items), docs) })));
 });
 
 app.post('/api/datasets/parse', (req, res) => {
@@ -167,22 +208,202 @@ app.post('/api/datasets/parse', (req, res) => {
   }
 });
 
+/** 上传文件导入：preview 为 true 时只返回解析结果 */
+app.post('/api/datasets/import-files', (req, res) => {
+  const { name, description, files, preview } = req.body ?? {};
+  if (!Array.isArray(files) || !files.length) throw new ApiError(400, '请选择要导入的文件');
+  const parsed = importFiles(files.map((f: any) => ({ name: String(f.name ?? ''), content: String(f.content ?? '') })));
+  if (preview) {
+    const ids = new Set(parsed.documents.map((d) => d.id));
+    const linked = parsed.items.filter((i) => i.relevantDocs?.some((r) => ids.has(r))).length;
+    res.json({ documents: parsed.documents.length, items: parsed.items.length, linked, warnings: parsed.warnings, sampleItems: parsed.items.slice(0, 5), sampleDocuments: parsed.documents.slice(0, 5).map((d) => ({ id: d.id, title: d.title, length: d.content.length })) });
+    return;
+  }
+  if (!name) throw new ApiError(400, '名称必填');
+  if (!parsed.items.length) throw new ApiError(400, '没有解析到问题，请检查文件格式');
+  res.json(datasetDetail(addDataset({ name, description, documents: parsed.documents, items: parsed.items })));
+});
+
 app.put('/api/datasets/:id', (req, res) => {
-  const d = db.datasets.find((x) => x.id === req.params.id);
-  if (!d) throw new ApiError(404, '测评集不存在');
+  const d = findDataset(req.params.id);
   const { name, description, items } = req.body ?? {};
   if (name !== undefined) d.name = name;
   if (description !== undefined) d.description = description;
-  if (items !== undefined) d.items = cleanItems(items);
+  if (items !== undefined) d.items = resolveRelevantDocs(cleanItems(items), d.documents ?? []);
   d.updatedAt = now();
   save();
-  res.json(d);
+  res.json(datasetDetail(d));
 });
 
 app.delete('/api/datasets/:id', (req, res) => {
   db.datasets = db.datasets.filter((x) => x.id !== req.params.id);
   save();
   res.json({ ok: true });
+});
+
+// ---------- 测评集文档集合 ----------
+app.get('/api/datasets/:id/documents', (req, res) => {
+  const d = findDataset(req.params.id);
+  const q = String(req.query.q ?? '').trim().toLowerCase();
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 20));
+  const referenced = new Set(d.items.flatMap((i) => i.relevantDocs ?? []));
+  let docs = d.documents ?? [];
+  if (q) docs = docs.filter((doc) => doc.id.toLowerCase().includes(q) || doc.title.toLowerCase().includes(q) || doc.content.toLowerCase().includes(q));
+  res.json({
+    total: docs.length,
+    documents: docs.slice(offset, offset + limit).map((doc) => ({
+      id: doc.id,
+      title: doc.title,
+      url: doc.url,
+      length: doc.content.length,
+      preview: doc.content.slice(0, 160),
+      referenced: referenced.has(doc.id),
+    })),
+  });
+});
+
+app.get('/api/datasets/:id/documents/:docId', (req, res) => {
+  const doc = findDataset(req.params.id).documents?.find((x) => x.id === req.params.docId);
+  if (!doc) throw new ApiError(404, '文档不存在');
+  res.json(doc);
+});
+
+app.post('/api/datasets/:id/documents', (req, res) => {
+  const d = findDataset(req.params.id);
+  const incoming = cleanDocs(Array.isArray(req.body?.documents) ? req.body.documents : [req.body]);
+  if (!incoming.length) throw new ApiError(400, '文档内容不能为空');
+  const existing = new Set((d.documents ?? []).map((x) => x.id));
+  for (const doc of incoming) if (existing.has(doc.id)) throw new ApiError(400, `文档 ID 已存在：${doc.id}`);
+  d.documents = [...(d.documents ?? []), ...incoming];
+  d.updatedAt = now();
+  save();
+  res.json({ added: incoming.length, documentCount: d.documents.length });
+});
+
+app.put('/api/datasets/:id/documents/:docId', (req, res) => {
+  const d = findDataset(req.params.id);
+  const doc = d.documents?.find((x) => x.id === req.params.docId);
+  if (!doc) throw new ApiError(404, '文档不存在');
+  const { title, content, url } = req.body ?? {};
+  if (title !== undefined) doc.title = String(title).trim() || doc.id;
+  if (content !== undefined) {
+    if (!String(content).trim()) throw new ApiError(400, '文档内容不能为空');
+    doc.content = String(content);
+  }
+  if (url !== undefined) doc.url = url || undefined;
+  d.updatedAt = now();
+  save();
+  res.json(doc);
+});
+
+app.delete('/api/datasets/:id/documents/:docId', (req, res) => {
+  const d = findDataset(req.params.id);
+  d.documents = (d.documents ?? []).filter((x) => x.id !== req.params.docId);
+  d.updatedAt = now();
+  save();
+  res.json({ ok: true, documentCount: d.documents.length });
+});
+
+function sendDownload(res: Response, filename: string, type: string, body: Buffer | string) {
+  res.setHeader('Content-Type', type);
+  res.setHeader('Content-Disposition', `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.send(body);
+}
+
+app.get('/api/datasets/:id/export', (req, res) => {
+  const d = findDataset(req.params.id);
+  const format = String(req.query.format ?? 'json');
+  const base = d.name.replace(/[\\/:*?"<>|]+/g, ' ').trim() || d.id;
+  if (format === 'json') {
+    const { id: _i, createdAt: _c, updatedAt: _u, syncs: _s, ...data } = d;
+    return sendDownload(res, `${base}.json`, 'application/json; charset=utf-8', JSON.stringify(data, null, 2));
+  }
+  if (format === 'corpus-zip') {
+    if (!d.documents?.length) throw new ApiError(400, '该测评集没有文档集合');
+    return sendDownload(res, `${base}-文档集合.zip`, 'application/zip', createZip(d.documents.map((doc) => ({ name: docFileName(doc), content: docMarkdown(doc) }))));
+  }
+  if (format === 'skill-zip') {
+    if (!d.documents?.length) throw new ApiError(400, '该测评集没有文档集合');
+    const files = skillFiles(d);
+    const root = files[0].content.match(/^name: (.+)$/m)?.[1] ?? 'kb-skill';
+    return sendDownload(res, `${root}.zip`, 'application/zip', createZip(files.map((f) => ({ name: `${root}/${f.name}`, content: f.content }))));
+  }
+  throw new ApiError(400, `不支持的导出格式：${format}`);
+});
+
+/** 把文档集合生成为本地 Skill 目录，并可直接创建 Skill 接入 */
+app.post('/api/datasets/:id/skill', (req, res) => {
+  const d = findDataset(req.params.id);
+  if (!d.documents?.length) throw new ApiError(400, '该测评集没有文档集合');
+  const dir = writeSkillDir(d, path.join(DATA_DIR, 'skills'));
+  let connector: Connector | undefined;
+  if (req.body?.createConnector) {
+    connector = {
+      id: newId('kb'),
+      name: `${d.source?.name.split(' · ').pop() ?? d.name} · Skill`,
+      type: 'skill',
+      description: `由测评集「${d.name}」的文档集合生成的 Skill 技能包`,
+      config: { skillPath: dir, mode: req.body?.mode === 'agent' ? 'agent' : 'retrieval', allowScripts: 'no', maxSteps: 6 },
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    db.connectors.push(connector);
+    save();
+  }
+  res.json({ path: dir, connector: connector && maskConnector(connector) });
+});
+
+/** 把文档集合导入到被测知识库，保证各家知识库基于同一份语料评测 */
+app.post('/api/datasets/:id/sync', (req, res) => {
+  const d = findDataset(req.params.id);
+  const c = db.connectors.find((x) => x.id === req.body?.connectorId);
+  if (!c) throw new ApiError(404, '知识库不存在');
+  const adapter = getAdapter(c.type);
+  if (!adapter.ingest) throw new ApiError(400, `${adapter.name} 不支持自动导入文档，请导出文档集合后手动上传`);
+  if (!d.documents?.length) throw new ApiError(400, '该测评集没有文档集合');
+  const docs = d.documents;
+  const job = startJob('sync', `同步「${d.name}」到「${c.name}」`, async (report) => {
+    report(0, `准备上传 ${docs.length} 篇文档…`);
+    const r = await adapter.ingest!(c.config, docs, { onProgress: (done, total) => report(done / total, `已上传 ${done} / ${total}`) });
+    d.syncs = [...(d.syncs ?? []).filter((s) => s.connectorId !== c.id), { connectorId: c.id, connectorName: c.name, at: now(), uploaded: r.uploaded, failed: r.failed }];
+    save();
+    if (!r.uploaded && r.failed) throw new Error(r.errors[0] ?? '全部上传失败');
+    return { ...r };
+  });
+  res.json(job);
+});
+
+// ---------- 社区评测集 ----------
+app.get('/api/benchmarks', (_req, res) => {
+  res.json(
+    benchmarkCatalog.map(({ spec, ...b }) => ({
+      ...b,
+      format: spec.format,
+      hfDataset: spec.format === 'beir' ? spec.corpus.dataset : spec.format === 'squad' ? spec.data.dataset : spec.corpus.dataset,
+      splits: spec.format === 'squad' ? spec.splits : undefined,
+      imported: db.datasets.filter((d) => d.source?.benchmarkId === b.id).map((d) => ({ id: d.id, name: d.name })),
+    })),
+  );
+});
+
+app.post('/api/benchmarks/import', (req, res) => {
+  const { benchmarkId, queries, distractors, seed, split, name } = req.body ?? {};
+  const entry = benchmarkCatalog.find((b) => b.id === benchmarkId);
+  if (!entry) throw new ApiError(404, '未知的社区评测集');
+  const job = startJob('benchmark-import', `导入 ${entry.name}`, async (report) => {
+    const data = await importBenchmark(entry.id, { queries, distractors, seed, split }, report);
+    report(0.95, '保存测评集…');
+    const d = addDataset({ ...data, name: String(name || '').trim() || data.name });
+    return { datasetId: d.id, documents: data.documents.length, items: data.items.length };
+  });
+  res.json(job);
+});
+
+app.get('/api/jobs/:id', (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) throw new ApiError(404, '任务不存在或已过期');
+  res.json(job);
 });
 
 // ---------- 评测任务 ----------
@@ -286,13 +507,14 @@ app.get('/api/runs/:id/export', (req, res) => {
 app.post(
   '/api/debug/evaluate',
   wrap(async (req, res) => {
-    const { connectorId, item, topK } = req.body ?? {};
+    const { connectorId, item, topK, datasetId } = req.body ?? {};
     const c = db.connectors.find((x) => x.id === connectorId);
     if (!c) throw new ApiError(404, '知识库不存在');
     const it = normalizeItem(item ?? {});
     if (!it) throw new ApiError(400, '问题不能为空');
     const params = { topK: Number(topK) || 5, concurrency: 1, timeoutMs: 60000, useJudge: true, weights: db.settings.weights };
-    res.json(await evaluateItem(c, it, { params }, new AbortController().signal));
+    const ds = datasetId ? db.datasets.find((x) => x.id === datasetId) : undefined;
+    res.json(await evaluateItem(c, it, { params }, new AbortController().signal, corpusOf(ds)));
   }),
 );
 
@@ -329,6 +551,7 @@ app.get('/api/stats', (_req, res) => {
     connectors: db.connectors.length,
     datasets: db.datasets.length,
     questions: db.datasets.reduce((s, d) => s + d.items.length, 0),
+    documents: db.datasets.reduce((s, d) => s + (d.documents?.length ?? 0), 0),
     runs: db.runs.length,
     running: db.runs.filter((r) => r.status === 'running').length,
   });
@@ -339,6 +562,7 @@ const publicSettings = () => ({
   ...db.settings,
   judge: { ...db.settings.judge, apiKey: maskValue(db.settings.judge.apiKey) },
   agent: { ...db.settings.agent, apiKey: maskValue(db.settings.agent.apiKey) },
+  hfToken: maskValue(db.settings.hfToken),
 });
 
 app.get('/api/settings', (_req, res) => res.json(publicSettings()));
@@ -356,6 +580,8 @@ app.put('/api/settings', (req, res) => {
   if (body.weights) db.settings.weights = { ...db.settings.weights, ...body.weights };
   if (body.latencyTargetMs !== undefined) db.settings.latencyTargetMs = Number(body.latencyTargetMs);
   if (body.latencyMaxMs !== undefined) db.settings.latencyMaxMs = Number(body.latencyMaxMs);
+  if (body.hfEndpoint !== undefined) db.settings.hfEndpoint = String(body.hfEndpoint).trim() || 'https://huggingface.co';
+  if (typeof body.hfToken === 'string' && !body.hfToken.startsWith(MASK)) db.settings.hfToken = body.hfToken.trim();
   save();
   res.json(publicSettings());
 });
@@ -381,7 +607,8 @@ function seed() {
     id: newId('ds'),
     name: '星云云产品问答（演示）',
     description: '内置演示测评集，与「内置演示知识库」配套，覆盖计费、产品规格、安全、SLA 等场景。',
-    items: demoDatasetItems.map((i) => ({ ...i, id: newId('q') })),
+    items: demoDatasetItemsWithIds.map((i) => ({ ...i, id: newId('q') })),
+    documents: demoDatasetDocuments,
     createdAt: now(),
     updatedAt: now(),
   };
@@ -404,9 +631,14 @@ function seed() {
     config: { skillPath: DEMO_SKILL_DIR, mode: 'retrieval', allowScripts: 'no', maxSteps: 6 },
     createdAt: now(), updatedAt: now(),
   };
-  db.connectors.push(...kbs, mcp, skill);
+  const bm25: Connector = {
+    id: newId('kb'), name: '本地 BM25 基线', type: 'local-bm25', description: '直接对测评集文档集合建立 BM25 索引，作为传统关键词检索基线',
+    config: { chunkSize: 400, answerMode: 'extractive' },
+    createdAt: now(), updatedAt: now(),
+  };
+  db.connectors.push(...kbs, bm25, mcp, skill);
   save(true);
-  createRun({ datasetId: ds.id, connectorIds: [...kbs, mcp, skill].map((k) => k.id), topK: 5, concurrency: 6, name: '演示评测：多种接入形式对比' });
+  createRun({ datasetId: ds.id, connectorIds: [...kbs, bm25, mcp, skill].map((k) => k.id), topK: 5, concurrency: 6, name: '演示评测：多种接入形式对比' });
 }
 
 recoverRuns();

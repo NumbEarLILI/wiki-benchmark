@@ -1,14 +1,45 @@
 import type { AggregateMetrics, DatasetItem, ItemMetrics, ItemResult, RetrievedContext, ScoreWeights } from './types.js';
-import { containsNormalized, keywordCoverage, normalize, tokenF1, tokenize, rougeL } from './text.js';
+import { keywordCoverage, tokenF1, tokenize, rougeL } from './text.js';
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 
-function matchDoc(ctx: RetrievedContext, doc: string): boolean {
-  const ident = `${ctx.id ?? ''} ${ctx.source ?? ''}`;
-  if (containsNormalized(ident, doc)) return true;
-  // 文件名可能带扩展名，例如 relevantDocs 写 "退货政策"，召回来源为 "退货政策.md"
-  const base = normalize(doc.replace(/\.[a-z0-9]{1,5}$/i, ''));
-  return base.length > 0 && normalize(ident).includes(base);
+const ESCAPE = /[.*+?^${}()|[\]\\]/g;
+const stripExt = (s: string) => s.replace(/\.[a-z0-9]{1,5}$/i, '');
+
+/** 文件名词干：去掉 "#片段序号"、目录与扩展名 */
+function stem(ident: string): string {
+  const noFrag = ident.replace(/#[^#/]*$/, '');
+  return stripExt(noFrag.slice(noFrag.lastIndexOf('/') + 1)).toLowerCase();
+}
+
+/**
+ * 文档 ID 只做精确匹配：召回片段的 id / 来源词干等于该 ID，或以 "ID__" 开头
+ * （导出 / 同步到知识库的文件名约定为 `{id}__{标题}.md`），避免 "1" 误中 "12"。
+ */
+export function matchesDocId(ctx: RetrievedContext, id: string): boolean {
+  const target = id.toLowerCase();
+  return [ctx.id, ctx.source].some((v) => {
+    if (!v) return false;
+    const st = stem(String(v));
+    return st === target || st.startsWith(`${target}__`);
+  });
+}
+
+/** 标题 / 文件名按完整词边界匹配，例如 "退款政策" 命中 "references/退款政策.md"，但 "退款" 不命中 */
+export function matchesDocName(ctx: RetrievedContext, name: string): boolean {
+  const n = stripExt(name.trim()).toLowerCase();
+  if (!n) return false;
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${n.replace(ESCAPE, '\\$&')}([^\\p{L}\\p{N}]|$)`, 'u');
+  return [ctx.id, ctx.source].some((v) => !!v && re.test(String(v).toLowerCase()));
+}
+
+export type DocAliases = Map<string, string[]>;
+
+function matchDoc(ctx: RetrievedContext, doc: string, aliases?: DocAliases): boolean {
+  if (matchesDocId(ctx, doc)) return true;
+  const names = aliases?.get(doc);
+  if (names) return names.some((n) => matchesDocName(ctx, n));
+  return matchesDocName(ctx, doc);
 }
 
 function referenceRecall(content: string, reference: string): number {
@@ -27,11 +58,11 @@ export interface RetrievalEval {
 
 /**
  * 检索相关性判定优先级：
- * 1. relevantDocs：召回片段的 id / 来源命中标注文档
+ * 1. relevantDocs：召回片段的 id / 来源命中标注文档（文档 ID 精确匹配，标题按词边界匹配）
  * 2. keywords：片段覆盖至少一半的关键要点
  * 3. referenceAnswer：片段覆盖参考答案 50% 以上的词元
  */
-export function evaluateRetrieval(item: DatasetItem, contexts: RetrievedContext[], topK: number): RetrievalEval | null {
+export function evaluateRetrieval(item: DatasetItem, contexts: RetrievedContext[], topK: number, aliases?: DocAliases): RetrievalEval | null {
   const docs = item.relevantDocs?.filter(Boolean) ?? [];
   const keywords = item.keywords?.filter(Boolean) ?? [];
   const reference = item.referenceAnswer?.trim() ?? '';
@@ -45,7 +76,7 @@ export function evaluateRetrieval(item: DatasetItem, contexts: RetrievedContext[
   if (docs.length) {
     const found = new Set<string>();
     flags = top.map((ctx) => {
-      const matched = docs.filter((d) => matchDoc(ctx, d));
+      const matched = docs.filter((d) => matchDoc(ctx, d, aliases));
       matched.forEach((d) => found.add(d));
       return matched.length > 0;
     });

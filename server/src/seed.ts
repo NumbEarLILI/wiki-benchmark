@@ -1,4 +1,4 @@
-import type { DatasetItem } from './types.js';
+import type { DatasetDocument, DatasetItem } from './types.js';
 
 export interface DemoDoc {
   id: string;
@@ -158,3 +158,10 @@ export const demoDatasetItems: SeedItem[] = [
     tags: ['SLA'],
   },
 ];
+
+export const demoDatasetDocuments: DatasetDocument[] = demoDocs.map((d) => ({ id: d.id, title: d.title.replace(/\.md$/, ''), content: d.content }));
+
+export const demoDatasetItemsWithIds: SeedItem[] = demoDatasetItems.map((it) => ({
+  ...it,
+  relevantDocs: it.relevantDocs?.map((t) => demoDatasetDocuments.find((d) => d.title === t)?.id ?? t),
+}));

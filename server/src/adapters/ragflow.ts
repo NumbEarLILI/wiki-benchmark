@@ -1,5 +1,7 @@
 import type { AdapterDefinition } from '../types.js';
-import { num, requestJson, str, trimSlash } from './http.js';
+import { HttpError, num, requestJson, str, trimSlash } from './http.js';
+import { docFileName, docMarkdown } from '../corpus.js';
+import { ingestBatches } from './ingest.js';
 
 function check(data: any) {
   if (data?.code !== undefined && data.code !== 0) throw new Error(`RAGFlow 错误 ${data.code}: ${data.message ?? ''}`);
@@ -24,7 +26,7 @@ export const ragflowAdapter: AdapterDefinition = {
         { label: '聊天助手（检索 + 生成）', value: 'chat' },
       ],
     },
-    { key: 'datasetIds', label: '知识库 ID', type: 'text', help: '检索模式必填，多个用逗号分隔', showIf: { key: 'mode', values: ['retrieval'] } },
+    { key: 'datasetIds', label: '知识库 ID', type: 'text', help: '检索模式必填，多个用逗号分隔；同步测评集文档时导入到第一个知识库' },
     { key: 'chatId', label: '聊天助手 ID', type: 'text', help: '聊天模式必填', showIf: { key: 'mode', values: ['chat'] } },
     { key: 'similarityThreshold', label: '相似度阈值', type: 'number', default: 0.2, showIf: { key: 'mode', values: ['retrieval'] } },
     { key: 'vectorWeight', label: '向量相似度权重', type: 'number', default: 0.3, showIf: { key: 'mode', values: ['retrieval'] } },
@@ -80,5 +82,22 @@ export const ragflowAdapter: AdapterDefinition = {
       })),
       raw: data,
     };
+  },
+  async ingest(config, documents, opts) {
+    const base = trimSlash(config.baseUrl);
+    const headers = { Authorization: `Bearer ${str(config.apiKey)}` };
+    const datasetId = str(config.datasetIds).split(/[,，\s]+/).filter(Boolean)[0];
+    if (!datasetId) throw new Error('请先在接入配置中填写知识库 ID');
+    return ingestBatches(documents, { ...opts, batchSize: 20, concurrency: 2 }, async (batch) => {
+      const form = new FormData();
+      for (const doc of batch) form.append('file', new Blob([docMarkdown(doc)], { type: 'text/markdown' }), docFileName(doc));
+      const res = await fetch(`${base}/api/v1/datasets/${datasetId}/documents`, { method: 'POST', headers, body: form, signal: opts.signal });
+      const text = await res.text();
+      if (!res.ok) throw new HttpError(res.status, `HTTP ${res.status}: ${text.slice(0, 200)}`);
+      const ids = (check(JSON.parse(text)).data ?? []).map((d: any) => d.id).filter(Boolean);
+      if (ids.length) {
+        check(await requestJson(`${base}/api/v1/datasets/${datasetId}/chunks`, { headers, signal: opts.signal, body: { document_ids: ids } }));
+      }
+    });
   },
 };

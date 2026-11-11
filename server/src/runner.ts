@@ -1,8 +1,20 @@
 import { capabilitiesOf, getAdapter } from './adapters/index.js';
-import { aggregate, evaluateAnswer, evaluateRetrieval } from './metrics.js';
+import { aggregate, evaluateAnswer, evaluateRetrieval, type DocAliases } from './metrics.js';
+import { corpusKey, docAliases } from './corpus.js';
 import { judgeAnswer } from './judge.js';
 import { db, now, save } from './store.js';
-import type { Connector, DatasetItem, ItemResult, Run } from './types.js';
+import type { Connector, Dataset, DatasetDocument, DatasetItem, ItemResult, Run } from './types.js';
+
+export interface CorpusContext {
+  documents?: DatasetDocument[];
+  aliases?: DocAliases;
+  key?: string;
+}
+
+export function corpusOf(ds?: Dataset): CorpusContext {
+  if (!ds?.documents?.length) return {};
+  return { documents: ds.documents, aliases: docAliases(ds.documents), key: corpusKey(ds) };
+}
 
 const controllers = new Map<string, AbortController>();
 
@@ -36,6 +48,7 @@ export async function evaluateItem(
   item: DatasetItem,
   run: Pick<Run, 'params'>,
   signal: AbortSignal,
+  corpus: CorpusContext = {},
 ): Promise<ItemResult> {
   const adapter = getAdapter(connector.type);
   const caps = capabilitiesOf(connector.type, connector.config);
@@ -52,7 +65,12 @@ export async function evaluateItem(
   const t = withTimeout(signal, run.params.timeoutMs);
   const started = performance.now();
   try {
-    const res = await adapter.query(connector.config, item.question, { topK: run.params.topK, signal: t.signal });
+    const res = await adapter.query(connector.config, item.question, {
+      topK: run.params.topK,
+      signal: t.signal,
+      documents: corpus.documents,
+      corpusKey: corpus.key,
+    });
     base.latencyMs = Math.round(performance.now() - started);
     base.answer = res.answer;
     if (res.trace?.length) base.trace = res.trace;
@@ -66,7 +84,7 @@ export async function evaluateItem(
   }
 
   if (caps.retrieval) {
-    const r = evaluateRetrieval(item, base.contexts, run.params.topK);
+    const r = evaluateRetrieval(item, base.contexts, run.params.topK, corpus.aliases);
     if (r) {
       base.relevantFlags = r.flags;
       Object.assign(base.metrics, r.metrics);
@@ -113,6 +131,7 @@ export async function executeRun(run: Run) {
     return;
   }
   const ctrl = new AbortController();
+  const corpus = corpusOf(dataset);
   controllers.set(run.id, ctrl);
   run.status = 'running';
   run.startedAt = now();
@@ -133,7 +152,7 @@ export async function executeRun(run: Run) {
         dataset.items,
         run.params.concurrency,
         async (item) => {
-          const res = await evaluateItem(connector, item, run, ctrl.signal);
+          const res = await evaluateItem(connector, item, run, ctrl.signal, corpus);
           if (ctrl.signal.aborted) return;
           run.results.push(res);
           const rs = run.results.filter((r) => r.connectorId === summary.connectorId);

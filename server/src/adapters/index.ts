@@ -6,6 +6,7 @@ import { fastgptAdapter } from './fastgpt.js';
 import { customHttpAdapter, openaiAdapter } from './custom.js';
 import { mcpAdapter } from './mcp.js';
 import { skillAdapter } from './skill.js';
+import { localBm25Adapter } from './local-bm25.js';
 import { str } from './http.js';
 
 mockAdapter.resolveCapabilities = (c) => ({ retrieval: true, answer: str(c.answerMode, 'extractive') !== 'none' });
@@ -17,6 +18,7 @@ customHttpAdapter.resolveCapabilities = (c) => ({ retrieval: !!str(c.contextsPat
 
 export const adapters: AdapterDefinition[] = [
   mockAdapter,
+  localBm25Adapter,
   mcpAdapter,
   skillAdapter,
   difyAdapter,

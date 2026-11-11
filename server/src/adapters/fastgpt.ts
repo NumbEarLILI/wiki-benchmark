@@ -1,5 +1,7 @@
 import type { AdapterDefinition, RetrievedContext } from '../types.js';
 import { num, requestJson, str, trimSlash } from './http.js';
+import { docFileName, docMarkdown } from '../corpus.js';
+import { ingestEach } from './ingest.js';
 
 function scoreOf(s: unknown): number | undefined {
   if (typeof s === 'number') return s;
@@ -34,7 +36,14 @@ export const fastgptAdapter: AdapterDefinition = {
         { label: '知识库搜索', value: 'search' },
       ],
     },
-    { key: 'datasetId', label: '知识库 ID', type: 'text', help: '仅搜索模式需要', showIf: { key: 'mode', values: ['search'] } },
+    { key: 'datasetId', label: '知识库 ID', type: 'text', help: '搜索模式必填；同步测评集文档时也会导入到这个知识库' },
+    {
+      key: 'datasetApiKey',
+      label: '账号 OpenAPI Key',
+      type: 'password',
+      help: '用于同步测评集文档（应用专属 Key 无权导入）；搜索模式下留空则使用上面的 API Key',
+      showIf: { key: 'mode', values: ['chat'] },
+    },
     {
       key: 'searchMode',
       label: '搜索方式',
@@ -83,5 +92,19 @@ export const fastgptAdapter: AdapterDefinition = {
       contexts: quotes.slice(0, topK).map(toContext),
       raw: data,
     };
+  },
+  async ingest(config, documents, opts) {
+    const base = trimSlash(config.baseUrl);
+    const key = str(config.datasetApiKey) || (str(config.mode, 'chat') === 'search' ? str(config.apiKey) : '');
+    if (!config.datasetId) throw new Error('请先在接入配置中填写知识库 ID');
+    if (!key) throw new Error('请先在接入配置中填写账号 OpenAPI Key');
+    return ingestEach(documents, opts, async (doc) => {
+      const data = await requestJson(`${base}/api/core/dataset/collection/create/text`, {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: opts.signal,
+        body: { datasetId: str(config.datasetId), name: docFileName(doc), text: docMarkdown(doc), trainingType: 'chunk' },
+      });
+      if (data?.code !== undefined && data.code !== 200) throw new Error(data.message ?? `code ${data.code}`);
+    });
   },
 };

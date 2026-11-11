@@ -38,35 +38,36 @@ export function chunkText(text: string, maxLen = 400): string[] {
 }
 
 export class BM25Index<C extends IndexedChunk = IndexedChunk> {
-  private terms: string[][];
-  private df = new Map<string, number>();
+  private postings = new Map<string, [number, number][]>();
+  private lengths: number[];
   private avgLen: number;
 
   constructor(public readonly chunks: C[], textOf: (c: C) => string = (c) => c.content) {
-    this.terms = chunks.map((c) => bm25Terms(textOf(c)));
-    for (const ts of this.terms) for (const t of new Set(ts)) this.df.set(t, (this.df.get(t) ?? 0) + 1);
-    this.avgLen = this.terms.reduce((s, t) => s + t.length, 0) / Math.max(1, chunks.length);
+    this.lengths = chunks.map((c, i) => {
+      const terms = bm25Terms(textOf(c));
+      const tf = new Map<string, number>();
+      for (const t of terms) tf.set(t, (tf.get(t) ?? 0) + 1);
+      for (const [t, f] of tf) {
+        if (!this.postings.has(t)) this.postings.set(t, []);
+        this.postings.get(t)!.push([i, f]);
+      }
+      return terms.length;
+    });
+    this.avgLen = this.lengths.reduce((s, l) => s + l, 0) / Math.max(1, chunks.length) || 1;
   }
 
   search(query: string, limit = this.chunks.length): { chunk: C; score: number }[] {
-    const q = [...new Set(bm25Terms(query))];
     const n = this.chunks.length;
     const k1 = 1.2;
     const b = 0.75;
-    return this.chunks
-      .map((chunk, i) => {
-        const tf = new Map<string, number>();
-        for (const t of this.terms[i]) tf.set(t, (tf.get(t) ?? 0) + 1);
-        let score = 0;
-        for (const t of q) {
-          const f = tf.get(t);
-          if (!f) continue;
-          const df = this.df.get(t) ?? 0;
-          const idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
-          score += (idf * f * (k1 + 1)) / (f + k1 * (1 - b + (b * this.terms[i].length) / this.avgLen));
-        }
-        return { chunk, score };
-      })
+    const scores = new Float64Array(n);
+    for (const t of new Set(bm25Terms(query))) {
+      const list = this.postings.get(t);
+      if (!list) continue;
+      const idf = Math.log(1 + (n - list.length + 0.5) / (list.length + 0.5));
+      for (const [i, f] of list) scores[i] += (idf * f * (k1 + 1)) / (f + k1 * (1 - b + (b * this.lengths[i]) / this.avgLen));
+    }
+    return Array.from(scores, (score, i) => ({ chunk: this.chunks[i], score }))
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
   }

@@ -1,5 +1,7 @@
 import type { AdapterDefinition } from '../types.js';
 import { requestJson, str, trimSlash } from './http.js';
+import { docFileName, docMarkdown } from '../corpus.js';
+import { ingestEach } from './ingest.js';
 
 export const difyAdapter: AdapterDefinition = {
   type: 'dify',
@@ -19,7 +21,14 @@ export const difyAdapter: AdapterDefinition = {
       ],
     },
     { key: 'apiKey', label: 'API Key', type: 'password', required: true, help: '应用模式使用应用 API Key；检索模式使用知识库 API Key' },
-    { key: 'datasetId', label: '知识库 ID', type: 'text', help: '仅检索模式需要', showIf: { key: 'mode', values: ['dataset'] } },
+    { key: 'datasetId', label: '知识库 ID', type: 'text', help: '检索模式必填；同步测评集文档时也会导入到这个知识库（应用模式下应为应用所关联的知识库）' },
+    {
+      key: 'datasetApiKey',
+      label: '知识库 API Key',
+      type: 'password',
+      help: '用于同步测评集文档；检索模式下留空则使用上面的 API Key',
+      showIf: { key: 'mode', values: ['chat'] },
+    },
     {
       key: 'searchMethod',
       label: '检索方式',
@@ -80,5 +89,18 @@ export const difyAdapter: AdapterDefinition = {
       })),
       raw: data,
     };
+  },
+  async ingest(config, documents, opts) {
+    const base = trimSlash(config.baseUrl);
+    const key = str(config.datasetApiKey) || (str(config.mode, 'chat') === 'dataset' ? str(config.apiKey) : '');
+    if (!config.datasetId) throw new Error('请先在接入配置中填写知识库 ID');
+    if (!key) throw new Error('请先在接入配置中填写知识库 API Key');
+    return ingestEach(documents, opts, async (doc) => {
+      await requestJson(`${base}/datasets/${str(config.datasetId)}/document/create-by-text`, {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: opts.signal,
+        body: { name: docFileName(doc), text: docMarkdown(doc), indexing_technique: 'high_quality', process_rule: { mode: 'automatic' } },
+      });
+    });
   },
 };

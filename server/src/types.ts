@@ -38,6 +38,16 @@ export interface QueryResult {
 export interface QueryOptions {
   topK: number;
   signal?: AbortSignal;
+  /** 测评集的文档集合，供本地检索基线等直接使用语料的接入 */
+  documents?: DatasetDocument[];
+  /** 文档集合的缓存键（测评集 ID + 更新时间） */
+  corpusKey?: string;
+}
+
+export interface IngestResult {
+  uploaded: number;
+  failed: number;
+  errors: string[];
 }
 
 export interface AdapterDefinition {
@@ -50,6 +60,12 @@ export interface AdapterDefinition {
   /** 按具体配置判断实际能力，例如"仅检索"模式不评估答案 */
   resolveCapabilities?(config: Record<string, unknown>): { retrieval: boolean; answer: boolean };
   query(config: Record<string, unknown>, question: string, opts: QueryOptions): Promise<QueryResult>;
+  /** 把测评集文档导入到该知识库（可选） */
+  ingest?(
+    config: Record<string, unknown>,
+    documents: DatasetDocument[],
+    opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
+  ): Promise<IngestResult>;
 }
 
 export interface Connector {
@@ -62,11 +78,35 @@ export interface Connector {
   updatedAt: string;
 }
 
+export interface DatasetDocument {
+  id: string;
+  title: string;
+  content: string;
+  url?: string;
+}
+
+export interface DatasetSource {
+  benchmarkId?: string;
+  name: string;
+  url?: string;
+  license?: string;
+  split?: string;
+  sampling?: { queries: number; distractors: number; seed: number };
+}
+
+export interface DatasetSyncRecord {
+  connectorId: string;
+  connectorName: string;
+  at: string;
+  uploaded: number;
+  failed: number;
+}
+
 export interface DatasetItem {
   id: string;
   question: string;
   referenceAnswer?: string;
-  /** 相关文档标识（文档 ID / 文件名 / 标题），用于检索命中判定 */
+  /** 相关文档标识：有文档集合时为文档 ID；否则为文件名 / 标题，用于检索命中判定 */
   relevantDocs?: string[];
   /** 关键要点，用于答案与召回内容的覆盖率评估 */
   keywords?: string[];
@@ -78,6 +118,10 @@ export interface Dataset {
   name: string;
   description?: string;
   items: DatasetItem[];
+  /** 知识库文档集合：被测知识库需要预先导入这些文档 */
+  documents?: DatasetDocument[];
+  source?: DatasetSource;
+  syncs?: DatasetSyncRecord[];
   createdAt: string;
   updatedAt: string;
 }
@@ -109,6 +153,9 @@ export interface Settings {
   /** 低于该延迟（毫秒）得满分，超过 latencyMaxMs 得 0 分 */
   latencyTargetMs: number;
   latencyMaxMs: number;
+  /** Hugging Face 地址，国内可改为镜像如 https://hf-mirror.com */
+  hfEndpoint: string;
+  hfToken: string;
 }
 
 export interface ItemMetrics {

@@ -16,9 +16,11 @@ export const defaultSettings: Settings = {
   weights: { retrieval: 0.4, answer: 0.4, performance: 0.2 },
   latencyTargetMs: 1500,
   latencyMaxMs: 15000,
+  hfEndpoint: 'https://huggingface.co',
+  hfToken: '',
 };
 
-const DATA_DIR = process.env.DATA_DIR || path.resolve(process.cwd(), 'data');
+export const DATA_DIR = process.env.DATA_DIR || path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 export function newId(prefix: string) {
