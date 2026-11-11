@@ -35,9 +35,24 @@ export function matchesDocName(ctx: RetrievedContext, name: string): boolean {
 
 export type DocAliases = Map<string, string[]>;
 
+/** 召回片段能解析出测评集中某篇文档的 ID 时，只按 ID 判定，避免同名标题误判 */
+function identifiedDoc(ctx: RetrievedContext, aliases: DocAliases): string | undefined {
+  for (const v of [ctx.source, ctx.id]) {
+    if (!v) continue;
+    const st = stem(String(v));
+    const head = st.includes('__') ? st.slice(0, st.indexOf('__')) : st;
+    for (const cand of [head, st]) if (aliases.has(cand)) return cand;
+  }
+  return undefined;
+}
+
 function matchDoc(ctx: RetrievedContext, doc: string, aliases?: DocAliases): boolean {
   if (matchesDocId(ctx, doc)) return true;
-  const names = aliases?.get(doc);
+  if (aliases) {
+    const known = identifiedDoc(ctx, aliases);
+    if (known !== undefined) return known === doc.toLowerCase();
+  }
+  const names = aliases?.get(doc.toLowerCase());
   if (names) return names.some((n) => matchesDocName(ctx, n));
   return matchesDocName(ctx, doc);
 }

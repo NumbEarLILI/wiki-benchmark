@@ -93,6 +93,7 @@ app.put('/api/connectors/:id', (req, res) => {
 
 app.delete('/api/connectors/:id', (req, res) => {
   db.connectors = db.connectors.filter((x) => x.id !== req.params.id);
+  for (const d of db.datasets) if (d.syncs) d.syncs = d.syncs.filter((s) => s.connectorId !== req.params.id);
   save();
   res.json({ ok: true });
 });

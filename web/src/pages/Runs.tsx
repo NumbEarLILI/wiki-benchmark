@@ -50,7 +50,7 @@ function NewRunModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     <Modal open={open} onClose={onClose} wide title="新建评测任务" footer={<><Button onClick={onClose}>取消</Button><Button variant="primary" loading={saving} disabled={!datasetId || !selected.length} onClick={submit}>开始评测</Button></>}>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="任务名称"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="留空自动生成" /></Field>
-        <Field label="测评集" required help={ds ? `${ds.itemCount} 题 · 带参考答案 ${ds.withAnswer} · 带相关文档 ${ds.withDocs}` : undefined}>
+        <Field label="测评集" required help={ds ? `${ds.itemCount} 题 · ${ds.documentCount} 篇文档 · 带参考答案 ${ds.withAnswer} · 带相关文档 ${ds.withDocs}${ds.documentCount && !ds.syncs?.length ? ' · 提示：文档尚未同步到任何知识库' : ''}` : undefined}>
           <Select value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
             {datasets.data?.map((d) => <option key={d.id} value={d.id}>{d.name}（{d.itemCount} 题）</option>)}
           </Select>

@@ -14,7 +14,7 @@ function itemAnswerScore(m: ItemMetrics): number | undefined {
   return parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : undefined;
 }
 
-export function ResultDetail({ result, item }: { result: ItemResult; item?: DatasetItem }) {
+export function ResultDetail({ result, item, docTitles }: { result: ItemResult; item?: DatasetItem; docTitles?: Record<string, string> }) {
   const shown = METRICS.filter((m) => result.metrics[m.key] !== undefined);
   return (
     <div className="space-y-4 text-sm">
@@ -38,7 +38,7 @@ export function ResultDetail({ result, item }: { result: ItemResult; item?: Data
           <div className="mb-1 text-xs font-medium text-emerald-700">参考答案</div>
           <div className="whitespace-pre-wrap text-slate-800">{item?.referenceAnswer ?? <span className="text-slate-400">（未提供）</span>}</div>
           <div className="mt-2 flex flex-wrap gap-1">
-            {item?.relevantDocs?.map((d) => <Badge key={d} tone="blue">{d}</Badge>)}
+            {item?.relevantDocs?.slice(0, 8).map((d) => <Badge key={d} tone="blue" className="max-w-64 truncate">{docTitles?.[d] ?? d}</Badge>)}
             {item?.keywords?.map((k) => <Badge key={k} tone="amber">{k}</Badge>)}
           </div>
         </div>
@@ -289,7 +289,7 @@ export default function RunDetail() {
                               <Tabs value={conn} onChange={setActiveConn} items={summaries.filter((s) => v.results.has(s.connectorId)).map((s) => ({ value: s.connectorId, label: s.connectorName }))} />
                             </div>
                           )}
-                          {v.results.get(conn) && <ResultDetail result={v.results.get(conn)!} item={itemsById.get(itemId)} />}
+                          {v.results.get(conn) && <ResultDetail result={v.results.get(conn)!} item={itemsById.get(itemId)} docTitles={dataset.data?.docTitles} />}
                         </td>
                       </tr>
                     )}

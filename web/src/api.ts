@@ -1,5 +1,10 @@
 import type {
   AdapterInfo,
+  Benchmark,
+  DatasetDocument,
+  DocumentListItem,
+  FileImportPreview,
+  Job,
   Connector,
   Dataset,
   DatasetItem,
@@ -26,7 +31,7 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 
 export const api = {
   adapters: () => req<AdapterInfo[]>('GET', '/api/adapters'),
-  stats: () => req<{ connectors: number; datasets: number; questions: number; runs: number; running: number }>('GET', '/api/stats'),
+  stats: () => req<{ connectors: number; datasets: number; questions: number; documents: number; runs: number; running: number }>('GET', '/api/stats'),
 
   connectors: () => req<Connector[]>('GET', '/api/connectors'),
   createConnector: (c: Partial<Connector>) => req<Connector>('POST', '/api/connectors', c),
@@ -39,10 +44,25 @@ export const api = {
 
   datasets: () => req<DatasetSummary[]>('GET', '/api/datasets'),
   dataset: (id: string) => req<Dataset>('GET', `/api/datasets/${id}`),
-  createDataset: (d: { name: string; description?: string; items?: Partial<DatasetItem>[] }) => req<Dataset>('POST', '/api/datasets', d),
+  createDataset: (d: { name: string; description?: string; items?: Partial<DatasetItem>[]; documents?: Partial<DatasetDocument>[] }) => req<Dataset>('POST', '/api/datasets', d),
   updateDataset: (id: string, d: Partial<Dataset>) => req<Dataset>('PUT', `/api/datasets/${id}`, d),
   deleteDataset: (id: string) => req('DELETE', `/api/datasets/${id}`),
   parseDataset: (content: string) => req<{ items: DatasetItem[] }>('POST', '/api/datasets/parse', { content }),
+  previewFiles: (files: { name: string; content: string }[]) => req<FileImportPreview>('POST', '/api/datasets/import-files', { files, preview: true }),
+  importFiles: (body: { name: string; description?: string; files: { name: string; content: string }[] }) => req<Dataset>('POST', '/api/datasets/import-files', body),
+  documents: (id: string, params: { q?: string; offset?: number; limit?: number }) =>
+    req<{ total: number; documents: DocumentListItem[] }>('GET', `/api/datasets/${id}/documents?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]))}`),
+  document: (id: string, docId: string) => req<DatasetDocument>('GET', `/api/datasets/${id}/documents/${encodeURIComponent(docId)}`),
+  addDocument: (id: string, doc: Partial<DatasetDocument>) => req<{ added: number; documentCount: number }>('POST', `/api/datasets/${id}/documents`, doc),
+  updateDocument: (id: string, docId: string, doc: Partial<DatasetDocument>) => req<DatasetDocument>('PUT', `/api/datasets/${id}/documents/${encodeURIComponent(docId)}`, doc),
+  deleteDocument: (id: string, docId: string) => req('DELETE', `/api/datasets/${id}/documents/${encodeURIComponent(docId)}`),
+  exportUrl: (id: string, format: 'json' | 'corpus-zip' | 'skill-zip') => `/api/datasets/${id}/export?format=${format}`,
+  createSkill: (id: string, body: { createConnector: boolean; mode?: 'retrieval' | 'agent' }) => req<{ path: string; connector?: Connector }>('POST', `/api/datasets/${id}/skill`, body),
+  syncDataset: (id: string, connectorId: string) => req<Job>('POST', `/api/datasets/${id}/sync`, { connectorId }),
+
+  benchmarks: () => req<Benchmark[]>('GET', '/api/benchmarks'),
+  importBenchmark: (body: { benchmarkId: string; queries: number; distractors: number; seed: number; split?: string; name?: string }) => req<Job>('POST', '/api/benchmarks/import', body),
+  job: (id: string) => req<Job>('GET', `/api/jobs/${id}`),
 
   runs: () => req<Run[]>('GET', '/api/runs'),
   run: (id: string) => req<Run>('GET', `/api/runs/${id}`),
@@ -60,8 +80,8 @@ export const api = {
   rerun: (id: string) => req<Run>('POST', `/api/runs/${id}/rerun`),
   rescore: (id: string, weights: ScoreWeights) => req<Run>('POST', `/api/runs/${id}/rescore`, { weights }),
   deleteRun: (id: string) => req('DELETE', `/api/runs/${id}`),
-  debugEvaluate: (connectorId: string, item: Partial<DatasetItem>, topK: number) =>
-    req<ItemResult>('POST', '/api/debug/evaluate', { connectorId, item, topK }),
+  debugEvaluate: (connectorId: string, item: Partial<DatasetItem>, topK: number, datasetId?: string) =>
+    req<ItemResult>('POST', '/api/debug/evaluate', { connectorId, item, topK, datasetId }),
 
   leaderboard: (datasetId?: string) => req<LeaderboardEntry[]>('GET', `/api/leaderboard${datasetId ? `?datasetId=${datasetId}` : ''}`),
   settings: () => req<Settings>('GET', '/api/settings'),

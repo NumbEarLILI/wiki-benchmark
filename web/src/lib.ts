@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ItemMetrics, RunStatus } from './types';
+import type { ItemMetrics, Job, RunStatus } from './types';
+import { api } from './api';
 
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = [], pollMs?: number | (() => number | undefined)) {
   const [data, setData] = useState<T>();
@@ -91,4 +92,37 @@ export function scoreTone(v?: number) {
   if (v >= 80) return 'text-emerald-600';
   if (v >= 60) return 'text-amber-600';
   return 'text-rose-600';
+}
+
+/** 轮询后台任务直到结束 */
+export function useJob(onFinish?: (job: Job) => void) {
+  const [job, setJob] = useState<Job>();
+  const cb = useRef(onFinish);
+  cb.current = onFinish;
+  useEffect(() => {
+    if (!job || job.status !== 'running') return;
+    const t = setTimeout(async () => {
+      try {
+        const next = await api.job(job.id);
+        setJob(next);
+        if (next.status !== 'running') cb.current?.(next);
+      } catch (e) {
+        setJob({ ...job, status: 'error', error: (e as Error).message });
+      }
+    }, 700);
+    return () => clearTimeout(t);
+  }, [job]);
+  return [job, setJob] as const;
+}
+
+export const fmtNum = (n?: number) => (n === undefined ? '—' : n.toLocaleString('en-US'));
+
+export function download(url: string) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.click();
+}
+
+export async function readFiles(list: FileList | File[]) {
+  return Promise.all([...list].map(async (f) => ({ name: (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name, content: await f.text() })));
 }

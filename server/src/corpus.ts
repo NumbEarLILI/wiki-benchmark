@@ -20,7 +20,7 @@ export function docMarkdown(doc: DatasetDocument): string {
 
 export function docAliases(documents?: DatasetDocument[]): DocAliases | undefined {
   if (!documents?.length) return undefined;
-  return new Map(documents.map((d) => [d.id, [d.title, docFileName(d)].filter(Boolean)]));
+  return new Map(documents.map((d) => [d.id.toLowerCase(), [d.title, docFileName(d)].filter(Boolean)]));
 }
 
 export function corpusKey(ds: Dataset) {

@@ -32,6 +32,7 @@ export interface AdapterInfo {
   description: string;
   capabilities: ('retrieval' | 'answer')[];
   fields: FieldDef[];
+  ingest: boolean;
 }
 
 export interface Connector {
@@ -61,11 +62,47 @@ export interface DatasetItem {
   tags?: string[];
 }
 
+export interface DatasetDocument {
+  id: string;
+  title: string;
+  content: string;
+  url?: string;
+}
+
+export interface DocumentListItem {
+  id: string;
+  title: string;
+  url?: string;
+  length: number;
+  preview: string;
+  referenced: boolean;
+}
+
+export interface DatasetSource {
+  benchmarkId?: string;
+  name: string;
+  url?: string;
+  license?: string;
+  split?: string;
+  sampling?: { queries: number; distractors: number; seed: number };
+}
+
+export interface DatasetSyncRecord {
+  connectorId: string;
+  connectorName: string;
+  at: string;
+  uploaded: number;
+  failed: number;
+}
+
 export interface DatasetSummary {
   id: string;
   name: string;
   description?: string;
+  source?: DatasetSource;
+  syncs?: DatasetSyncRecord[];
   itemCount: number;
+  documentCount: number;
   withAnswer: number;
   withDocs: number;
   withKeywords: number;
@@ -75,6 +112,47 @@ export interface DatasetSummary {
 
 export interface Dataset extends Omit<DatasetSummary, 'itemCount' | 'withAnswer' | 'withDocs' | 'withKeywords'> {
   items: DatasetItem[];
+  /** 问题所引用文档的 ID → 标题 */
+  docTitles: Record<string, string>;
+}
+
+export interface Benchmark {
+  id: string;
+  name: string;
+  org: string;
+  lang: 'zh' | 'en';
+  domain: string;
+  task: string;
+  description: string;
+  homepage: string;
+  license: string;
+  stats: { documents: number; questions: number };
+  hasAnswers: boolean;
+  defaults: { queries: number; distractors: number };
+  format: 'beir' | 'squad' | 'multihop-rag';
+  hfDataset: string;
+  splits?: string[];
+  imported: { id: string; name: string }[];
+}
+
+export interface Job {
+  id: string;
+  type: 'benchmark-import' | 'sync';
+  title: string;
+  status: 'running' | 'done' | 'error';
+  progress: number;
+  message: string;
+  result?: Record<string, any>;
+  error?: string;
+}
+
+export interface FileImportPreview {
+  documents: number;
+  items: number;
+  linked: number;
+  warnings: string[];
+  sampleItems: DatasetItem[];
+  sampleDocuments: { id: string; title: string; length: number }[];
 }
 
 export interface ItemMetrics {
@@ -171,6 +249,8 @@ export interface Settings {
   weights: ScoreWeights;
   latencyTargetMs: number;
   latencyMaxMs: number;
+  hfEndpoint: string;
+  hfToken: string;
 }
 
 export interface TestResult {

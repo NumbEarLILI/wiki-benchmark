@@ -80,11 +80,19 @@ export default function SettingsPage() {
           </div>
         </Card>
 
+        <Card title="社区评测集数据源" className="lg:col-span-2">
+          <p className="mb-4 text-xs text-slate-500">导入社区评测集时从 Hugging Face 读取 Parquet 数据。国内网络可改为镜像地址（如 https://hf-mirror.com）；访问受限数据集时填写 Access Token。</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Hugging Face 地址"><Input value={s.hfEndpoint} onChange={(e) => setS({ ...s, hfEndpoint: e.target.value })} placeholder="https://huggingface.co" /></Field>
+            <Field label="Access Token（可选）"><Input type="password" autoComplete="off" value={s.hfToken} onChange={(e) => setS({ ...s, hfToken: e.target.value })} placeholder="hf_..." /></Field>
+          </div>
+        </Card>
+
         <Card title="评分口径说明" className="lg:col-span-2">
           <div className="grid gap-6 text-xs leading-relaxed text-slate-600 md:grid-cols-3">
             <div>
               <h4 className="mb-2 text-sm font-semibold text-slate-900">检索得分</h4>
-              <p>Hit@K、Recall@K、MRR、nDCG@K 四项的均值 × 100。相关性判定优先使用题目的「相关文档」匹配召回片段的来源/ID；未标注时使用「关键要点」覆盖（≥50%），再退化为参考答案词元覆盖（≥50%）。</p>
+              <p>Hit@K、Recall@K、MRR、nDCG@K 四项的均值 × 100。相关性判定优先使用题目的「相关文档」匹配召回片段的来源/ID（按文档 ID 精确匹配，或匹配文档标题 / 文件名）；未标注时使用「关键要点」覆盖（≥50%），再退化为参考答案词元覆盖（≥50%）。</p>
             </div>
             <div>
               <h4 className="mb-2 text-sm font-semibold text-slate-900">答案得分</h4>

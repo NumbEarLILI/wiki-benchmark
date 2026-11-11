@@ -24,6 +24,7 @@ export function isFieldVisible(field: FieldDef, adapter: AdapterInfo | undefined
 function connectorSummary(c: Connector): string {
   const cfg = c.config;
   if (c.type === 'mock') return `noise=${cfg.noise} latency=${cfg.latencyMs}ms`;
+  if (c.type === 'local-bm25') return `BM25 · chunk=${cfg.chunkSize ?? 400} · 使用测评集文档集合`;
   if (c.type === 'mcp') {
     const target = cfg.transport === 'stdio' ? `${cfg.command ?? ''} ${cfg.args ?? ''}`.trim() : String(cfg.url ?? '');
     return `${cfg.transport ?? 'streamable-http'} · ${cfg.mode === 'agent' ? 'agent' : String(cfg.toolName ?? '')} · ${target}`;
@@ -284,6 +285,7 @@ export default function Connectors() {
                   <Badge tone="indigo">{adapterName(c.type)}</Badge>
                   {c.capabilities.retrieval && <Badge tone="blue">检索</Badge>}
                   {c.capabilities.answer && <Badge tone="green">问答</Badge>}
+                  {adapters.data?.find((a) => a.type === c.type)?.ingest && <Badge tone="amber">可同步文档</Badge>}
                 </div>
               </div>
               <div className="flex gap-1 opacity-60 transition group-hover:opacity-100">

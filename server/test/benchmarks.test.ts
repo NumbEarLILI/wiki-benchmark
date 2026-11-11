@@ -41,6 +41,15 @@ describe('relevance matching', () => {
     expect(r.flags).toEqual([false, true]);
     expect(r.metrics.mrr).toBe(0.5);
   });
+  it('does not credit a different document that shares the title', () => {
+    const dup: DatasetDocument[] = [
+      { id: 'A1', title: '三、全文', content: 'x' },
+      { id: 'B2', title: '三、全文', content: 'y' },
+    ];
+    const item = { id: 'q', question: 'q', relevantDocs: ['A1'] };
+    const r = evaluateRetrieval(item, [{ content: '', id: 'B2#0', source: 'B2__三、全文.md' }, { content: '', source: 'a1__三、全文.md' }], 5, docAliases(dup))!;
+    expect(r.flags).toEqual([false, true]);
+  });
 });
 
 describe('file import', () => {

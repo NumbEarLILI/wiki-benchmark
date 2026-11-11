@@ -4,10 +4,11 @@
 
 ## 功能
 
-- **知识库接入**：内置 8 类适配器，表单驱动配置，支持在线连通性测试、原始响应与工具调用轨迹查看
+- **知识库接入**：内置 9 类适配器，表单驱动配置，支持在线连通性测试、原始响应与工具调用轨迹查看
   | 类型 | 对接方式 |
   | --- | --- |
   | 内置演示知识库 | 本地 BM25（虚构的「星云云」产品文档），可调噪声与延迟，用于体验流程或作基线 |
+  | 本地检索基线（BM25） | 直接对测评集自带的文档集合建立 BM25 索引，无需部署任何服务，作为传统关键词检索的参考线 |
   | MCP 服务 | Streamable HTTP / SSE / WebSocket / stdio 四种传输；**直连模式**调用指定检索工具（可一键获取工具列表并按 inputSchema 生成参数模板），**Agent 模式**由 LLM 自主选择工具作答 |
   | Skill 技能包 | Agent Skill 规范（`SKILL.md` + 参考资料 / 脚本），支持单个技能或技能目录；**Agent 模式**由 LLM 按技能说明读文件、检索、（可选）执行脚本后作答，**检索模式**无需 LLM 直接评估资料可检索性 |
   | Dify | 应用对话 `chat-messages`（引用和归属）或知识库检索 `datasets/{id}/retrieve` |
@@ -15,7 +16,8 @@
   | FastGPT | 应用对话 `/api/v1/chat/completions`（`detail=true` 返回引用）或知识库搜索测试 |
   | OpenAI 兼容接口 | 任意 Chat Completions 兼容的 RAG 服务，可配置引用片段的提取路径 |
   | 自定义 HTTP | 请求模板（`{{question}}`、`{{topK}}`）+ 字段路径映射（支持 `a.b[0].c`、`[*]`） |
-- **测评集管理**：在线编辑，或导入 JSON / JSONL / CSV（兼容中英文字段别名），单题调试
+- **测评集 = 文档集合 + 问题集合**：内置 13 个社区开源专业评测集，一键按需抽样导入；也可上传 BEIR / SQuAD / Markdown 文档 + 问题文件，在线编辑文档与题目，单题调试
+- **文档接入知识库**：一键把测评集文档上传到 Dify / RAGFlow / FastGPT，或打包为 Skill 技能包 / 文档 ZIP，保证各家知识库基于同一份语料评测
 - **评测任务**：选择测评集 + 多个知识库并发跑分，实时进度，可停止、重跑、导出 CSV
 - **指标体系**
   - 检索：Hit@K、Recall@K、Precision@K、MRR、nDCG@K、上下文要点覆盖
@@ -31,7 +33,7 @@ npm install
 npm run dev          # API: http://localhost:8787  Web: http://localhost:5173
 ```
 
-首次启动会自动创建演示测评集与三个不同质量的演示知识库，并跑一次对比评测。设置 `NO_SEED=1` 可跳过。
+首次启动会自动创建演示测评集（含文档集合）、三个不同质量的演示知识库、本地 BM25 基线及 MCP / Skill 演示接入，并跑一次对比评测。设置 `NO_SEED=1` 可跳过。
 
 生产模式（由 API 服务托管前端静态文件）：
 
@@ -50,7 +52,39 @@ npm start            # http://localhost:8787
 - **安全提示**：stdio 传输会在服务端启动所配置的命令，Skill 的「允许执行脚本」会在服务端运行技能脚本，请仅用于可信的服务与技能。Skill 的文件读取被限制在技能目录内。
 - **得分可比性**：仅检索的接入（如 MCP 直连检索工具、Skill 检索模式）没有答案得分，综合分只由检索与性能加权得出，排行榜中会标注「仅检索」。
 
+## 社区开源评测集
+
+在「测评集」页面可直接导入以下基准。数据通过 Hugging Face datasets-server 的 Parquet 文件按需读取（HTTP Range，只读取所需的列和行），无需下载完整数据集，导入通常只需几秒。
+
+| 评测集 | 来源 | 语言 | 领域 | 类型 | 原始规模（文档 / 问题） |
+| --- | --- | --- | --- | --- | --- |
+| T2Retrieval | C-MTEB | 中文 | 通用搜索 | 段落检索 | 118,605 / 22,812 |
+| DuRetrieval | C-MTEB（百度 DuReader） | 中文 | 通用搜索 | 段落检索 | 100,001 / 2,000 |
+| MMarcoRetrieval | C-MTEB（mMARCO 中文） | 中文 | 通用搜索 | 段落检索 | 106,813 / 6,980 |
+| CmedqaRetrieval | C-MTEB | 中文 | 医疗 | 段落检索 | 100,001 / 3,999 |
+| MedicalRetrieval | C-MTEB | 中文 | 医疗 | 段落检索 | 100,999 / 1,000 |
+| CovidRetrieval | C-MTEB | 中文 | 政务 / 公共卫生 | 段落检索 | 100,001 / 949 |
+| EcomRetrieval | C-MTEB | 中文 | 电商 | 段落检索 | 100,902 / 1,000 |
+| CMRC 2018 | 哈工大讯飞联合实验室 | 中文 | 百科 | 阅读理解问答（含答案） | 848 / 3,219 |
+| SciFact / NFCorpus / FiQA-2018 | BEIR | 英文 | 科研 / 医学营养 / 金融 | 段落检索 | 5,183 / 300 等 |
+| SQuAD v1.1 | Stanford | 英文 | 百科 | 阅读理解问答（含答案） | 2,067 / 10,570 |
+| MultiHop-RAG | HKUST | 英文 | 新闻 | 多跳问答（含答案） | 609 / 2,556 |
+
+- **抽样方式**：随机抽取 N 道问题（默认 100），文档集合 = 这些问题的全部标注相关文档 + M 篇随机干扰文档；相同随机种子得到相同子集，便于复现。干扰文档越多，检索难度越接近真实场景。
+- **评测流程**：导入 → 在测评集详情页「接入知识库」把文档上传到被测服务（或生成 Skill 接入 / 下载文档 ZIP 手动导入）→ 等待知识库完成解析 → 新建评测任务跑分。「本地 BM25 基线」无需同步即可直接参与对比。
+- **命中判定**：上传到知识库的文件名为 `{文档ID}__{标题}.md`，召回片段的来源或 ID 能解析出文档 ID 时按 ID 精确判定；否则退化为按文档标题 / 文件名匹配。
+- **网络**：国内网络可在「评分设置 → 社区评测集数据源」改用镜像（如 `https://hf-mirror.com`）。各数据集许可以原始发布方为准，仅限评测研究用途。
+
 ## 测评集格式
+
+上传文件导入支持：
+
+- **BEIR / MTEB 目录**：`corpus.jsonl`（`_id` / `title` / `text`）+ `queries.jsonl` + `qrels/*.tsv`（或 TREC 格式 qrels）
+- **SQuAD / CMRC JSON**：`data[].paragraphs[].qas[]`，段落作为文档，答案作为参考答案
+- **文档 + 问题**：每个 Markdown / TXT / HTML 文件一篇文档（文件名作为 ID，`{id}__{标题}.md` 会被拆分），问题使用下面的 JSON / JSONL / CSV 格式，`relevantDocs` 可写文件名或标题，导入时自动映射为文档 ID
+- **本平台导出的 JSON**：`{ "documents": [...], "items": [...] }`
+
+问题格式：
 
 ```json
 [
@@ -65,24 +99,24 @@ npm start            # http://localhost:8787
 ```
 
 - `question` 必填；其余字段越完整，可计算的指标越多
-- `relevantDocs`：召回片段的来源（文件名）或 ID 包含该值即判定为相关
+- `relevantDocs`：有文档集合时为文档 ID；没有文档集合时填写文件名 / 标题，召回片段的来源或 ID 按完整词匹配该值即判定为相关
 - 未提供 `relevantDocs` 时，用 `keywords` 覆盖率（≥50%）判定相关；再退化为参考答案词元覆盖率（≥50%）
 - CSV 首行为表头，可用中文表头：`问题,参考答案,相关文档,关键词,标签`，多值用 `|` 或 `;` 分隔
 
 ## 扩展新的知识库
 
-在 `server/src/adapters/` 下实现 `AdapterDefinition`（声明配置字段 `fields` 与 `query()`，返回 `{ answer?, contexts[], trace? }`），并在 `adapters/index.ts` 中注册，前端表单会根据字段定义自动生成（字段可用 `showIf` 按其它字段取值显示）。需要 LLM 自主调用工具的接入可复用 `server/src/agent.ts` 中的 `runAgent`。
+在 `server/src/adapters/` 下实现 `AdapterDefinition`（声明配置字段 `fields` 与 `query()`，返回 `{ answer?, contexts[], trace? }`；可选实现 `ingest()` 以支持把测评集文档同步到该知识库），并在 `adapters/index.ts` 中注册，前端表单会根据字段定义自动生成（字段可用 `showIf` 按其它字段取值显示）。需要 LLM 自主调用工具的接入可复用 `server/src/agent.ts` 中的 `runAgent`。
 
 ## 目录结构
 
 ```
-server/   Express + TypeScript：适配器、指标计算、评测执行器、JSON 持久化
+server/   Express + TypeScript：适配器、指标计算、评测执行器、社区评测集导入（server/src/benchmarks）、JSON 持久化
 web/      React + Vite + Tailwind + Recharts 前端
 ```
 
 ## 测试
 
 ```bash
-npm test             # 指标、分词、数据导入、字段映射单元测试；MCP（HTTP / SSE / stdio）、Agent 循环与 Skill 集成测试
+npm test             # 指标、分词、数据导入、字段映射单元测试；MCP（HTTP / SSE / stdio）、Agent 循环与 Skill 集成测试；评测集文件导入、命中判定、ZIP 导出、BM25 基线与文档同步测试
 npm run typecheck
 ```
