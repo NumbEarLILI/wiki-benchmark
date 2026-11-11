@@ -385,7 +385,7 @@ export default function DatasetDetail() {
       {error && <div className="mb-4"><ErrorBox>{error}</ErrorBox></div>}
 
       {d && (
-        <div className="mb-5 grid gap-4 lg:grid-cols-3">
+        <div className="mb-5 grid items-start gap-4 lg:grid-cols-3">
           <Card className="lg:col-span-2" bodyClass="grid grid-cols-2 gap-4 p-5 sm:grid-cols-4">
             {[
               ['问题', d.items.length],
