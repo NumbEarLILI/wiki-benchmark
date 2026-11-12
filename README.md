@@ -46,6 +46,8 @@ npm start            # http://localhost:8787
 
 ## MCP 与 Skill 接入说明
 
+- **选择路径**：Skill 的「技能路径」旁有「浏览」按钮，可以在网页上浏览评测服务所在机器的目录并选中技能文件夹（包含 SKILL.md 的目录会标记为「技能」），常用位置里列出了演示技能、生成的技能和已接入的技能。目录浏览会暴露服务端的目录结构，请勿把评测服务暴露在公网。
+
 - **结果映射**：MCP 工具返回的 `text` 内容若为 JSON，会自动识别 `results / chunks / documents / records …` 列表及 `content / text / title / source / score …` 字段；也可手动填写路径。`resource` 类型内容会作为召回片段，来源取资源 URI。
 - **Agent 模型**：MCP Agent 模式与 Skill Agent 模式需要一个支持函数调用的 OpenAI 兼容模型。可在接入配置中单独指定，或在「评分设置 → 默认 Agent 模型」统一配置。Agent 调用工具时读取到的内容会作为召回片段参与检索指标计算，完整轨迹在逐题结果中可见。
 - **内置演示**：服务自身在 `/demo/mcp` 暴露了一个演示 MCP 知识库（Streamable HTTP）；stdio 方式可用命令 `npx tsx server/src/demo/mcp-stdio.ts` 启动。演示技能位于 `server/demo/skills/star-cloud-docs/`。
@@ -84,7 +86,7 @@ npm start            # http://localhost:8787
    - Dify / RAGFlow / FastGPT：直接调用各自的知识库文档 API。
    - **MCP / Skill：由大模型理解接口**。MCP 读取 `tools/list` 的工具名、说明和参数 Schema；Skill 读取 `SKILL.md`、文件列表和脚本开头。大模型选出写入文档的方式，生成参数模板（占位符 `{{id}} {{title}} {{fileName}} {{content}} {{markdown}} {{url}}`）。方案可在页面上直接修改，保存在接入配置中，之后每篇文档按模板确定性执行，不会逐篇调用大模型。
      - MCP：调用某个写入工具，如 `add_document(title, content)`，可选一个收尾工具（如触发索引）。
-     - Skill：运行技能自带的上传脚本（参数 + 标准输入，需开启「允许执行脚本」），或把文档写入技能目录的 `references/kb-bench/` 等子目录（每次全量导入前清空该子目录）。
+     - Skill：运行技能自带的上传脚本（参数 + 标准输入，需开启「允许执行脚本」），或把文档写入技能目录的 `references/kb-bench/` 等子目录（每次全量导入前清空该子目录）。脚本和写入目录从下拉框或目录浏览器中选择，不需要手填相对路径。
      - 未配置模型或模型调用失败时，按工具名 / 参数名的启发式规则生成方案，并在页面上提示。
 3. **试传第一篇文档**，查看工具 / 脚本的原始返回和耗时。
 4. **批量导入**，后台任务显示进度，结果记录在测评集上；新建评测时每个知识库会标出「已准备 / 未准备 / 无需准备」，点击「未准备」可直接打开向导。
