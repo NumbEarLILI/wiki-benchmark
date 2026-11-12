@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, CloudUpload, Database, ListTree, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react';
+import { CheckCircle2, CloudUpload, Database, FolderOpen, ListTree, Pencil, Plug, Plus, Trash2, XCircle } from 'lucide-react';
 import { api } from '../api';
 import { ms, useAsync } from '../lib';
 import type { AdapterInfo, Connector, FieldDef, McpToolInfo, TestResult } from '../types';
 import { TraceView } from '../components/Trace';
+import { PathPicker } from '../components/PathPicker';
 import { PREPARE_LABEL, PrepareModal } from '../components/PrepareModal';
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Textarea, cx } from '../components/ui';
 
@@ -82,6 +83,7 @@ function McpToolsPanel({ connectorId, config, onPick }: { connectorId?: string; 
 }
 
 function ConfigField({ field, value, onChange }: { field: FieldDef; value: unknown; onChange: (v: unknown) => void }) {
+  const [browsing, setBrowsing] = useState(false);
   const v = value === undefined || value === null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
   let control;
   if (field.type === 'select') {
@@ -103,8 +105,21 @@ function ConfigField({ field, value, onChange }: { field: FieldDef; value: unkno
         onChange={(e) => onChange(field.type === 'number' && e.target.value !== '' ? Number(e.target.value) : e.target.value)}
       />
     );
+    if (field.browse) {
+      control = (
+        <div className="flex gap-2">
+          {control}
+          <Button type="button" onClick={(e) => (e.preventDefault(), setBrowsing(true))}><FolderOpen className="size-4" />浏览</Button>
+        </div>
+      );
+    }
   }
-  return <Field label={field.label} help={field.help} required={field.required}>{control}</Field>;
+  return (
+    <>
+      <Field label={field.label} help={field.help} required={field.required}>{control}</Field>
+      {field.browse && <PathPicker open={browsing} onClose={() => setBrowsing(false)} initial={v} mode={field.browse} onPick={(p) => onChange(p)} />}
+    </>
+  );
 }
 
 export function TestPanel({ result }: { result?: TestResult }) {

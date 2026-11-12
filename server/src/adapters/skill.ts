@@ -226,7 +226,7 @@ export const skillAdapter: AdapterDefinition = {
   description: '评测以 Agent Skill（SKILL.md + 参考资料 / 脚本）形式封装的知识库。Agent 模式由 LLM 按技能说明查阅资料作答；检索模式直接对技能资料做全文检索。',
   capabilities: ['retrieval', 'answer'],
   fields: [
-    { key: 'skillPath', label: '技能路径', type: 'text', required: true, placeholder: '/path/to/skills/my-kb', help: '服务端本地路径：单个技能目录（含 SKILL.md），或包含多个技能的目录' },
+    { key: 'skillPath', label: '技能路径', type: 'text', required: true, browse: 'dir', placeholder: '/path/to/skills/my-kb', help: '点击「浏览」选择服务端目录：单个技能目录（含 SKILL.md），或包含多个技能的目录' },
     {
       key: 'mode',
       label: '调用模式',

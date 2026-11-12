@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Bot, CheckCircle2, CloudUpload, Download, FlaskConical, Puzzle, Sparkles, Wand2, XCircle } from 'lucide-react';
+import { Bot, CheckCircle2, CloudUpload, Download, FlaskConical, FolderOpen, Puzzle, Sparkles, Wand2, XCircle } from 'lucide-react';
 import { api } from '../api';
 import { download, fmtNum, fmtTime, useAsync, useJob } from '../lib';
-import type { Connector, IngestPlan, PrepareMethod, PrepareTestResult } from '../types';
+import type { Connector, IngestPlan, PrepareMethod, PrepareTestResult, SkillTree } from '../types';
+import { PathPicker } from './PathPicker';
 import { Badge, Button, ErrorBox, Field, Input, Modal, Progress, Select, Textarea, cx } from './ui';
 
 export const PREPARE_LABEL: Record<PrepareMethod, string> = {
@@ -49,9 +50,61 @@ function Step({ n, title, done, active, children }: { n: number; title: string; 
   );
 }
 
-function PlanEditor({ plan, onChange }: { plan: IngestPlan; onChange: (p: IngestPlan) => void }) {
+function toRelative(root: string, abs: string) {
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
+  const r = norm(root);
+  const a = norm(abs);
+  if (a === r) return '';
+  return a.startsWith(`${r}/`) ? a.slice(r.length + 1) : undefined;
+}
+
+/** 在技能目录内选择脚本或目录：下拉列出已有项，也可打开目录浏览器 */
+function SkillPathSelect({ tree, value, onChange, mode }: { tree?: SkillTree; value: string; onChange: (v: string) => void; mode: 'file' | 'dir' }) {
+  const [browsing, setBrowsing] = useState(false);
+  const [error, setError] = useState<string>();
+  const options = mode === 'file' ? tree?.scripts ?? [] : tree?.dirs ?? [];
+  return (
+    <div>
+      <div className="flex gap-2">
+        <Select value={value} onChange={(e) => onChange(e.target.value)}>
+          {!value && <option value="">{mode === 'file' ? '请选择脚本' : '请选择目录'}</option>}
+          {mode === 'dir' && !options.includes('') && <option value="">（技能根目录）</option>}
+          {value && !options.includes(value) && <option value={value}>{value}{mode === 'dir' ? '（将新建）' : '（不存在）'}</option>}
+          {options.map((o) => <option key={o} value={o}>{o || '（技能根目录）'}</option>)}
+        </Select>
+        <Button type="button" disabled={!tree} onClick={() => setBrowsing(true)}><FolderOpen className="size-4" />浏览</Button>
+      </div>
+      {error && <div className="mt-1 text-xs text-rose-600">{error}</div>}
+      {tree && (
+        <PathPicker
+          open={browsing}
+          onClose={() => setBrowsing(false)}
+          initial={value ? `${tree.root}/${value}` : tree.root}
+          mode={mode}
+          onPick={(abs) => {
+            const rel = toRelative(tree.root, abs);
+            setError(rel === undefined ? `只能选择技能目录（${tree.root}）内的${mode === 'file' ? '文件' : '目录'}` : undefined);
+            if (rel !== undefined) onChange(rel);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function PlanEditor({ plan, onChange, connectorId }: { plan: IngestPlan; onChange: (p: IngestPlan) => void; connectorId: string }) {
   const set = (patch: Partial<IngestPlan>) => onChange({ ...plan, ...patch, source: 'manual' });
   const src = SOURCE_LABEL[plan.source];
+  const isSkill = plan.kind !== 'mcp-tool';
+  const [tree, setTree] = useState<SkillTree>();
+  const [treeError, setTreeError] = useState<string>();
+  useEffect(() => {
+    if (!isSkill) return;
+    setTree(undefined);
+    setTreeError(undefined);
+    api.skillTree(connectorId).then(setTree, (e: Error) => setTreeError(e.message));
+  }, [connectorId, isSkill]);
+
   return (
     <div className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200">
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
@@ -68,16 +121,36 @@ function PlanEditor({ plan, onChange }: { plan: IngestPlan; onChange: (p: Ingest
           {plan.finalize && <div className="text-xs text-slate-500">全部上传后调用一次：<code className="rounded bg-white px-1">{plan.finalize.toolName}</code> {plan.finalize.argsTemplate}</div>}
         </div>
       )}
+      {isSkill && (
+        <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+          <span>导入方式</span>
+          {(['skill-files', 'skill-script'] as const).map((k) => (
+            <label key={k} className="flex items-center gap-1.5 text-slate-700">
+              <input
+                type="radio"
+                className="accent-indigo-600"
+                checked={plan.kind === k}
+                onChange={() => set(k === 'skill-script' ? { kind: k, script: plan.script ?? tree?.scripts[0] ?? '', argsTemplate: plan.argsTemplate ?? '["--name","{{fileName}}"]', stdinTemplate: plan.stdinTemplate ?? '{{markdown}}' } : { kind: k, dir: plan.dir ?? 'references' })}
+              />
+              {k === 'skill-files' ? '写入技能目录' : '执行上传脚本'}
+            </label>
+          ))}
+          {tree && <span className="ml-auto truncate font-mono text-[11px] text-slate-400" title={tree.root}>技能目录：{tree.root}</span>}
+        </div>
+      )}
+      {treeError && <div className="mb-3 text-xs text-rose-600">读取技能目录失败：{treeError}</div>}
       {plan.kind === 'skill-script' && (
         <div className="grid gap-3">
-          <Field label="上传脚本"><Input value={plan.script ?? ''} onChange={(e) => set({ script: e.target.value })} /></Field>
+          <Field label="上传脚本" help={tree && !tree.scripts.length ? '技能目录中没有找到脚本文件' : '技能目录内的脚本，需在接入配置中开启「允许执行脚本」'}>
+            <SkillPathSelect tree={tree} mode="file" value={plan.script ?? ''} onChange={(v) => set({ script: v })} />
+          </Field>
           <Field label="命令行参数模板 (JSON 数组)" help="占位符同上，每篇文档执行一次脚本"><Textarea rows={3} value={pretty(plan.argsTemplate)} onChange={(e) => set({ argsTemplate: e.target.value })} /></Field>
           <Field label="标准输入模板" help="留空表示不传标准输入"><Input value={plan.stdinTemplate ?? ''} onChange={(e) => set({ stdinTemplate: e.target.value || undefined })} /></Field>
         </div>
       )}
       {plan.kind === 'skill-files' && (
         <Field label="写入目录" help="文档以 {id}__{标题}.md 写入该目录下的 kb-bench/ 子目录，每次准备会替换上一批">
-          <Input value={plan.dir ?? 'references'} onChange={(e) => set({ dir: e.target.value })} />
+          <SkillPathSelect tree={tree} mode="dir" value={plan.dir ?? 'references'} onChange={(v) => set({ dir: v })} />
         </Field>
       )}
     </div>
@@ -248,7 +321,7 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
             <Button onClick={runPlan} loading={planning} disabled={!kbId || running}><Bot className="size-4" />{plan ? '重新解析' : '解析上传接口'}</Button>
             {savedPlan && plan === savedPlan && <span className="ml-3 text-xs text-slate-500">已加载上次保存的方案</span>}
             {note && <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-200">{note}</div>}
-            {plan && <div className="mt-3"><PlanEditor plan={plan} onChange={setPlan} /></div>}
+            {plan && <div className="mt-3"><PlanEditor plan={plan} onChange={setPlan} connectorId={kbId} /></div>}
           </Step>
         )}
 

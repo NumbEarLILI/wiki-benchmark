@@ -6,6 +6,8 @@ import type {
   FileImportPreview,
   IngestPlan,
   PrepareTestResult,
+  BrowseResult,
+  SkillTree,
   Job,
   Connector,
   Dataset,
@@ -63,6 +65,8 @@ export const api = {
   syncDataset: (id: string, body: { connectorId: string; plan?: IngestPlan; skip?: string[] }) => req<Job>('POST', `/api/datasets/${id}/sync`, body),
   preparePlan: (connectorId: string, datasetId?: string) => req<{ plan: IngestPlan; note?: string }>('POST', '/api/prepare/plan', { connectorId, datasetId }),
   prepareTest: (connectorId: string, datasetId: string, plan: IngestPlan) => req<PrepareTestResult>('POST', '/api/prepare/test', { connectorId, datasetId, plan }),
+  skillTree: (connectorId: string) => req<SkillTree>('POST', '/api/prepare/skill-tree', { connectorId }),
+  browse: (path?: string, files?: boolean) => req<BrowseResult>('GET', `/api/fs/browse?${new URLSearchParams({ ...(path ? { path } : {}), ...(files ? { files: '1' } : {}) })}`),
 
   benchmarks: () => req<Benchmark[]>('GET', '/api/benchmarks'),
   importBenchmark: (body: { benchmarkId: string; queries: number; distractors: number; seed: number; split?: string; name?: string }) => req<Job>('POST', '/api/benchmarks/import', body),

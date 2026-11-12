@@ -7,6 +7,8 @@ export interface FieldDef {
   help?: string;
   default?: string | number;
   options?: { label: string; value: string }[];
+  /** 文本框旁提供服务端目录浏览按钮 */
+  browse?: 'dir' | 'file';
   showIf?: { key: string; values: string[] };
 }
 
@@ -48,6 +50,31 @@ export interface IngestPlan {
   finalize?: { toolName: string; argsTemplate: string };
   reasoning: string;
   source: 'llm' | 'heuristic' | 'manual';
+}
+
+export interface SkillTree {
+  root: string;
+  skills: { name: string; dir: string }[];
+  dirs: string[];
+  scripts: string[];
+}
+
+export interface BrowseEntry {
+  name: string;
+  path: string;
+  dir: boolean;
+  skill?: boolean;
+}
+
+export interface BrowseResult {
+  path: string;
+  parent: string | null;
+  sep: string;
+  skill: boolean;
+  entries: BrowseEntry[];
+  error?: string;
+  roots: string[];
+  shortcuts: { label: string; path: string }[];
 }
 
 export interface PrepareTestResult {

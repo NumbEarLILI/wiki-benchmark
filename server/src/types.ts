@@ -7,6 +7,8 @@ export interface FieldDef {
   help?: string;
   default?: string | number;
   options?: { label: string; value: string }[];
+  /** 文本框旁提供服务端目录浏览按钮 */
+  browse?: 'dir' | 'file';
   /** 仅当另一字段取指定值时显示，例如只在 stdio 传输下显示启动命令 */
   showIf?: { key: string; values: string[] };
 }

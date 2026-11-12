@@ -215,7 +215,7 @@ function fillPlain(tpl: string, vars: Record<string, string>) {
 }
 
 function filesDir(root: string, plan: IngestPlan) {
-  return path.join(safeJoin(root, plan.dir || 'references'), FILES_SUBDIR);
+  return path.join(safeJoin(root, plan.dir ?? 'references'), FILES_SUBDIR);
 }
 
 /** 试传第一篇，返回接口输出，便于确认方案 */

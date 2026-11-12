@@ -81,12 +81,20 @@ export function Field({ label, help, required, children }: { label: string; help
   );
 }
 
+/** 打开中的弹窗，Esc 只关闭最上层的一个 */
+const modalStack: object[] = [];
+
 export function Modal({ open, onClose, title, children, footer, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const token = {};
+    modalStack.push(token);
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && modalStack[modalStack.length - 1] === token && onClose();
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      modalStack.splice(modalStack.indexOf(token), 1);
+    };
   }, [open, onClose]);
   if (!open) return null;
   return (

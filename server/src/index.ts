@@ -1,6 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adapters, capabilitiesOf, getAdapter, prepareMethodOf } from './adapters/index.js';
@@ -15,6 +16,7 @@ import { importFiles, resolveRelevantDocs } from './benchmarks/files.js';
 import { getJob, startJob } from './jobs.js';
 import { docFileName, docMarkdown, skillFiles, writeSkillDir } from './corpus.js';
 import { createZip } from './zip.js';
+import { browseDir, skillTree } from './fs-browse.js';
 
 import { closeAllMcpClients, listMcpTools } from './adapters/mcp.js';
 import { handleDemoMcp } from './demo/mcp-server.js';
@@ -358,7 +360,7 @@ app.post('/api/datasets/:id/skill', (req, res) => {
 
 function planLabel(p?: IngestPlan) {
   if (!p) return undefined;
-  const how = p.kind === 'mcp-tool' ? `MCP 工具 ${p.toolName}` : p.kind === 'skill-script' ? `技能脚本 ${p.script}` : `写入技能目录 ${p.dir || 'references'}/`;
+  const how = p.kind === 'mcp-tool' ? `MCP 工具 ${p.toolName}` : p.kind === 'skill-script' ? `技能脚本 ${p.script}` : `写入技能目录 ${p.dir ?? 'references'}/`;
   return `${how}（${{ llm: '大模型解析', heuristic: '规则识别', manual: '手动配置' }[p.source]}）`;
 }
 
@@ -414,6 +416,30 @@ app.post(
     }
   }),
 );
+
+/** 技能目录内的子目录与脚本，供上传方案在网页上选择 */
+app.post('/api/prepare/skill-tree', (req, res) => {
+  const { c } = prepContext(req.body);
+  if (c.type !== 'skill') throw new ApiError(400, '只有 Skill 接入有技能目录');
+  try {
+    res.json(skillTree(String(c.config.skillPath ?? '')));
+  } catch (e) {
+    throw new ApiError(400, (e as Error).message);
+  }
+});
+
+/** 浏览服务端目录，在网页上选择技能路径 */
+app.get('/api/fs/browse', (req, res) => {
+  const skillPaths = db.connectors.filter((c) => c.type === 'skill' && c.config.skillPath).map((c) => ({ label: c.name, path: path.resolve(String(c.config.skillPath)) }));
+  const shortcuts = [
+    { label: '演示技能', path: path.dirname(DEMO_SKILL_DIR) },
+    { label: '生成的技能', path: path.join(DATA_DIR, 'skills') },
+    ...skillPaths,
+    { label: '服务启动目录', path: process.cwd() },
+    { label: '用户主目录', path: os.homedir() },
+  ];
+  res.json(browseDir(typeof req.query.path === 'string' ? req.query.path : undefined, { files: req.query.files === '1', shortcuts }));
+});
 
 /** 准备知识库：把文档集合导入到被测知识库，保证各家知识库基于同一份语料评测 */
 app.post('/api/datasets/:id/sync', (req, res) => {
