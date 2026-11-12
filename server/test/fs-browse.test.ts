@@ -57,7 +57,7 @@ describe('skill tree', () => {
   });
 
   it('can write documents into the skill root when chosen', async () => {
-    const r = await executePlan('skill', { skillPath: skill }, { kind: 'skill-files', dir: '', source: 'manual' }, [{ id: 'D1', title: 'Doc', content: 'hello' }], { fresh: true });
+    const r = await executePlan('skill', { skillPath: skill }, { kind: 'skill-files', dir: '', reasoning: '', source: 'manual' }, [{ id: 'D1', title: 'Doc', content: 'hello' }], { fresh: true });
     expect(r.uploaded).toBe(1);
     expect(fs.readdirSync(path.join(skill, 'kb-bench'))).toEqual(['D1__Doc.md']);
   });
