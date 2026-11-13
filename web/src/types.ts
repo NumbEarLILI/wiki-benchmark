@@ -38,15 +38,12 @@ export interface AdapterInfo {
   prepare: PrepareMethod;
 }
 
-export type PrepareMethod = 'api' | 'llm' | 'none' | 'builtin' | 'manual';
+export type PrepareMethod = 'api' | 'llm' | 'dir' | 'none' | 'builtin' | 'manual';
 
 export interface IngestPlan {
-  kind: 'mcp-tool' | 'skill-script' | 'skill-files';
-  toolName?: string;
-  script?: string;
+  kind: 'mcp-tool';
+  toolName: string;
   argsTemplate?: string;
-  stdinTemplate?: string;
-  dir?: string;
   finalize?: { toolName: string; argsTemplate: string };
   reasoning: string;
   source: 'llm' | 'heuristic' | 'manual';
@@ -57,6 +54,7 @@ export interface SkillTree {
   skills: { name: string; dir: string }[];
   dirs: string[];
   scripts: string[];
+  ingestDir: string;
 }
 
 export interface BrowseEntry {

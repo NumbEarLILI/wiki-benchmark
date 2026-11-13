@@ -3,7 +3,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { browseDir, skillTree } from '../src/fs-browse.js';
-import { executePlan } from '../src/prepare.js';
 
 let tmp = '';
 let skill = '';
@@ -54,11 +53,5 @@ describe('skill tree', () => {
     expect(t.dirs).toEqual(['references', 'scripts']);
     expect(t.scripts).toEqual(['scripts/add_doc.py']);
     expect(t.skills[0].name).toBe('space-kb');
-  });
-
-  it('can write documents into the skill root when chosen', async () => {
-    const r = await executePlan('skill', { skillPath: skill }, { kind: 'skill-files', dir: '', source: 'manual' }, [{ id: 'D1', title: 'Doc', content: 'hello' }], { fresh: true });
-    expect(r.uploaded).toBe(1);
-    expect(fs.readdirSync(path.join(skill, 'kb-bench'))).toEqual(['D1__Doc.md']);
   });
 });

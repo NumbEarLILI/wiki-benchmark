@@ -10,6 +10,7 @@ import { Badge, Button, ErrorBox, Field, Input, Modal, Progress, Select, Textare
 export const PREPARE_LABEL: Record<PrepareMethod, string> = {
   api: '上传接口',
   llm: '大模型解析接口',
+  dir: '选择目录写入',
   none: '无需准备',
   builtin: '内置语料',
   manual: '需手动导入',
@@ -50,116 +51,48 @@ function Step({ n, title, done, active, children }: { n: number; title: string; 
   );
 }
 
-function toRelative(root: string, abs: string) {
-  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
-  const r = norm(root);
-  const a = norm(abs);
-  if (a === r) return '';
-  return a.startsWith(`${r}/`) ? a.slice(r.length + 1) : undefined;
-}
-
-/** 在技能目录内选择脚本或目录：下拉列出已有项，也可打开目录浏览器 */
-function SkillPathSelect({ tree, value, onChange, mode }: { tree?: SkillTree; value: string; onChange: (v: string) => void; mode: 'file' | 'dir' }) {
-  const [browsing, setBrowsing] = useState(false);
-  const [error, setError] = useState<string>();
-  const options = mode === 'file' ? tree?.scripts ?? [] : tree?.dirs ?? [];
-  return (
-    <div>
-      <div className="flex gap-2">
-        <Select value={value} onChange={(e) => onChange(e.target.value)}>
-          {!value && <option value="">{mode === 'file' ? '请选择脚本' : '请选择目录'}</option>}
-          {mode === 'dir' && !options.includes('') && <option value="">（技能根目录）</option>}
-          {value && !options.includes(value) && <option value={value}>{value}{mode === 'dir' ? '（将新建）' : '（不存在）'}</option>}
-          {options.map((o) => <option key={o} value={o}>{o || '（技能根目录）'}</option>)}
-        </Select>
-        <Button type="button" disabled={!tree} onClick={() => setBrowsing(true)}><FolderOpen className="size-4" />浏览</Button>
-      </div>
-      {error && <div className="mt-1 text-xs text-rose-600">{error}</div>}
-      {tree && (
-        <PathPicker
-          open={browsing}
-          onClose={() => setBrowsing(false)}
-          initial={value ? `${tree.root}/${value}` : tree.root}
-          mode={mode}
-          onPick={(abs) => {
-            const rel = toRelative(tree.root, abs);
-            setError(rel === undefined ? `只能选择技能目录（${tree.root}）内的${mode === 'file' ? '文件' : '目录'}` : undefined);
-            if (rel !== undefined) onChange(rel);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function PlanEditor({ plan, onChange, connectorId }: { plan: IngestPlan; onChange: (p: IngestPlan) => void; connectorId: string }) {
+function PlanEditor({ plan, onChange }: { plan: IngestPlan; onChange: (p: IngestPlan) => void }) {
   const set = (patch: Partial<IngestPlan>) => onChange({ ...plan, ...patch, source: 'manual' });
   const src = SOURCE_LABEL[plan.source];
-  const isSkill = plan.kind !== 'mcp-tool';
-  const [tree, setTree] = useState<SkillTree>();
-  const [treeError, setTreeError] = useState<string>();
-  useEffect(() => {
-    if (!isSkill) return;
-    setTree(undefined);
-    setTreeError(undefined);
-    api.skillTree(connectorId).then(setTree, (e: Error) => setTreeError(e.message));
-  }, [connectorId, isSkill]);
-
   return (
     <div className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200">
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
         <Badge tone={src.tone}>{plan.source === 'llm' ? <Sparkles className="size-3" /> : null}{src.label}</Badge>
-        <Badge>{plan.kind === 'mcp-tool' ? '调用 MCP 工具' : plan.kind === 'skill-script' ? '执行技能脚本' : '写入技能资料目录'}</Badge>
+        <Badge>调用 MCP 工具</Badge>
         {plan.reasoning && <span className="text-slate-500">{plan.reasoning}</span>}
       </div>
-      {plan.kind === 'mcp-tool' && (
-        <div className="grid gap-3">
-          <Field label="上传工具"><Input value={plan.toolName ?? ''} onChange={(e) => set({ toolName: e.target.value })} /></Field>
-          <Field label="参数模板 (JSON)" help="占位符：{{id}} {{title}} {{fileName}} {{content}} {{markdown}} {{url}}，每篇文档调用一次">
-            <Textarea rows={5} value={pretty(plan.argsTemplate)} onChange={(e) => set({ argsTemplate: e.target.value })} />
-          </Field>
-          {plan.finalize && <div className="text-xs text-slate-500">全部上传后调用一次：<code className="rounded bg-white px-1">{plan.finalize.toolName}</code> {plan.finalize.argsTemplate}</div>}
-        </div>
-      )}
-      {isSkill && (
-        <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">
-          <span>导入方式</span>
-          {(['skill-files', 'skill-script'] as const).map((k) => (
-            <label key={k} className="flex items-center gap-1.5 text-slate-700">
-              <input
-                type="radio"
-                className="accent-indigo-600"
-                checked={plan.kind === k}
-                onChange={() => set(k === 'skill-script' ? { kind: k, script: plan.script ?? tree?.scripts[0] ?? '', argsTemplate: plan.argsTemplate ?? '["--name","{{fileName}}"]', stdinTemplate: plan.stdinTemplate ?? '{{markdown}}' } : { kind: k, dir: plan.dir ?? 'references' })}
-              />
-              {k === 'skill-files' ? '写入技能目录' : '执行上传脚本'}
-            </label>
-          ))}
-          {tree && <span className="ml-auto truncate font-mono text-[11px] text-slate-400" title={tree.root}>技能目录：{tree.root}</span>}
-        </div>
-      )}
-      {treeError && <div className="mb-3 text-xs text-rose-600">读取技能目录失败：{treeError}</div>}
-      {plan.kind === 'skill-script' && (
-        <div className="grid gap-3">
-          <Field label="上传脚本" help={tree && !tree.scripts.length ? '技能目录中没有找到脚本文件' : '技能目录内的脚本，需在接入配置中开启「允许执行脚本」'}>
-            <SkillPathSelect tree={tree} mode="file" value={plan.script ?? ''} onChange={(v) => set({ script: v })} />
-          </Field>
-          <Field label="命令行参数模板 (JSON 数组)" help="占位符同上，每篇文档执行一次脚本"><Textarea rows={3} value={pretty(plan.argsTemplate)} onChange={(e) => set({ argsTemplate: e.target.value })} /></Field>
-          <Field label="标准输入模板" help="留空表示不传标准输入"><Input value={plan.stdinTemplate ?? ''} onChange={(e) => set({ stdinTemplate: e.target.value || undefined })} /></Field>
-        </div>
-      )}
-      {plan.kind === 'skill-files' && (
-        <Field label="写入目录" help="文档以 {id}__{标题}.md 写入该目录下的 kb-bench/ 子目录，每次准备会替换上一批">
-          <SkillPathSelect tree={tree} mode="dir" value={plan.dir ?? 'references'} onChange={(v) => set({ dir: v })} />
+      <div className="grid gap-3">
+        <Field label="上传工具"><Input value={plan.toolName} onChange={(e) => set({ toolName: e.target.value })} /></Field>
+        <Field label="参数模板 (JSON)" help="占位符：{{id}} {{title}} {{fileName}} {{content}} {{markdown}} {{url}}，每篇文档调用一次">
+          <Textarea rows={5} value={pretty(plan.argsTemplate)} onChange={(e) => set({ argsTemplate: e.target.value })} />
         </Field>
-      )}
+        {plan.finalize && <div className="text-xs text-slate-500">全部上传后调用一次：<code className="rounded bg-white px-1">{plan.finalize.toolName}</code> {plan.finalize.argsTemplate}</div>}
+      </div>
     </div>
   );
 }
 
+/** 选择写入目录：路径来自服务端目录浏览器，也可直接粘贴 */
+function DirField({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled?: boolean }) {
+  const [browsing, setBrowsing] = useState(false);
+  return (
+    <div className="flex gap-2">
+      <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="点击右侧「选择目录」" className="font-mono text-xs" disabled={disabled} />
+      <Button variant="primary" onClick={() => setBrowsing(true)} disabled={disabled}><FolderOpen className="size-4" />选择目录</Button>
+      <PathPicker open={browsing} onClose={() => setBrowsing(false)} initial={value} onPick={onChange} />
+    </div>
+  );
+}
+
+const isInside = (root: string, p: string) => {
+  const norm = (x: string) => x.replace(/\\/g, '/').replace(/\/+$/, '');
+  return norm(p) === norm(root) || norm(p).startsWith(`${norm(root)}/`);
+};
+
 /**
  * 准备知识库：把测评集的文档集合导入被测知识库。
- * Dify / RAGFlow / FastGPT 直接调用上传接口；MCP / Skill 先由大模型阅读接口说明生成上传方案，确认并试传后批量执行。
+ * Dify / RAGFlow / FastGPT 直接调用上传接口；MCP 先由大模型阅读工具说明生成上传方案，确认并试传后批量执行；
+ * Skill 及其它没有上传接口的知识库，选择一个目录后直接把文档写进去。
  */
 export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: { open: boolean; onClose: () => void; datasetId?: string; connectorId?: string; onDone?: () => void }) {
   const datasets = useAsync(api.datasets, [open]);
@@ -174,6 +107,8 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
   const [test, setTest] = useState<PrepareTestResult & { plan: string }>();
   const [error, setError] = useState<string>();
   const [skillMsg, setSkillMsg] = useState<string>();
+  const [dir, setDir] = useState('');
+  const [skill, setSkill] = useState<SkillTree>();
   const [job, setJob] = useJob(() => {
     datasets.reload();
     connectors.reload();
@@ -213,6 +148,20 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
     setTest(undefined);
   }, [kbId, savedPlan]);
 
+  const savedDir = typeof kb?.config.ingestDir === 'string' ? kb.config.ingestDir : '';
+  useEffect(() => {
+    setSkill(undefined);
+    setDir(savedDir);
+    if (!open || kb?.type !== 'skill') return;
+    api.skillTree(kb.id).then(
+      (t) => {
+        setSkill(t);
+        setDir((d) => d || t.ingestDir);
+      },
+      (e: Error) => setError(e.message),
+    );
+  }, [open, kb?.id, kb?.type, savedDir]);
+
   const running = job?.status === 'running';
   const planKey = JSON.stringify(plan ?? null);
   const testedOk = test?.ok && test.plan === planKey;
@@ -248,7 +197,12 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
   const start = async () => {
     setError(undefined);
     try {
-      const skip = testedOk && plan?.kind !== 'skill-files' ? [test!.docId] : undefined;
+      if (method === 'dir' || method === 'manual') {
+        if (!dir.trim()) throw new Error('请先选择写入目录');
+        setJob(await api.syncDataset(dsId, { connectorId: kbId, dir: dir.trim() }));
+        return;
+      }
+      const skip = testedOk ? [test!.docId] : undefined;
       setJob(await api.syncDataset(dsId, { connectorId: kbId, plan: method === 'llm' ? plan : undefined, skip }));
     } catch (e) {
       setError((e as Error).message);
@@ -267,7 +221,19 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
   };
 
   const result = job?.result as { uploaded: number; failed: number; skipped?: number; errors: string[] } | undefined;
-  const canStart = !!dsId && !!kbId && (method === 'api' || (method === 'llm' && !!plan)) && !running;
+  const canStart = !!dsId && !!kbId && (method === 'api' || (method === 'llm' && !!plan) || (method === 'dir' && !!dir.trim())) && !running;
+  const skipped = testedOk && method === 'llm' ? 1 : 0;
+  const progress = job ? (
+    <div className="space-y-1.5">
+      <div className="flex justify-between text-xs text-slate-600">
+        <span>{job.status === 'done' ? `完成：成功 ${result?.uploaded} 篇${result?.skipped ? `（含试传 ${result.skipped} 篇）` : ''}，失败 ${result?.failed} 篇` : job.status === 'error' ? '导入失败' : job.message}</span>
+        <span>{Math.round(job.progress * 100)}%</span>
+      </div>
+      <Progress value={job.progress} tone={job.status === 'done' ? 'emerald' : 'indigo'} />
+      {result?.errors?.slice(0, 3).map((e) => <div key={e} className="text-xs text-rose-600">{e}</div>)}
+      {job.error && <ErrorBox>{job.error}</ErrorBox>}
+    </div>
+  ) : null;
 
   return (
     <Modal
@@ -278,9 +244,9 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
       footer={
         <>
           <Button onClick={onClose} disabled={running}>{job?.status === 'done' ? '完成' : '关闭'}</Button>
-          {(method === 'api' || method === 'llm') && (
+          {(method === 'api' || method === 'llm' || method === 'dir') && (
             <Button variant="primary" loading={running} disabled={!canStart} onClick={start}>
-              <CloudUpload className="size-4" />开始导入{ds ? ` ${fmtNum(ds.documentCount - (testedOk && plan?.kind !== 'skill-files' ? 1 : 0))} 篇文档` : ''}
+              <CloudUpload className="size-4" />{method === 'dir' ? '写入' : '开始导入'}{ds ? ` ${fmtNum(ds.documentCount - skipped)} 篇文档` : ''}
             </Button>
           )}
         </>
@@ -311,17 +277,27 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
         </Step>
 
         {method === 'llm' && (
-          <Step n={2} title={`大模型解析${kb?.type === 'mcp' ? ' MCP 工具' : ' Skill'}，生成上传方案`} done={!!plan} active={!!kbId}>
+          <Step n={2} title="大模型解析 MCP 工具，生成上传方案" done={!!plan} active={!!kbId}>
             <p className="mb-3 text-xs leading-relaxed text-slate-500">
-              {kb?.type === 'mcp'
-                ? '读取 MCP 服务的工具列表及参数定义，由大模型找出写入文档的工具并生成参数模板。'
-                : '阅读 SKILL.md、文件列表与脚本，由大模型判断是调用技能自带的上传脚本，还是把文档写入技能的参考资料目录。'}
-              使用接入配置中的模型，未配置时使用「评分设置 → 默认 Agent 模型」；大模型不可用时自动改用规则识别。方案只解析一次，之后按模板逐篇执行。
+              读取 MCP 服务的工具列表及参数定义，由大模型找出写入文档的工具并生成参数模板。使用接入配置中的模型，未配置时使用「评分设置 → 默认 Agent 模型」；大模型不可用时自动改用规则识别。方案只解析一次，之后按模板逐篇执行。
             </p>
             <Button onClick={runPlan} loading={planning} disabled={!kbId || running}><Bot className="size-4" />{plan ? '重新解析' : '解析上传接口'}</Button>
             {savedPlan && plan === savedPlan && <span className="ml-3 text-xs text-slate-500">已加载上次保存的方案</span>}
             {note && <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-200">{note}</div>}
-            {plan && <div className="mt-3"><PlanEditor plan={plan} onChange={setPlan} connectorId={kbId} /></div>}
+            {plan && <div className="mt-3"><PlanEditor plan={plan} onChange={setPlan} /></div>}
+          </Step>
+        )}
+
+        {method === 'dir' && (
+          <Step n={2} title="选择文档写入的目录" done={!!dir.trim()} active={!!kbId}>
+            <DirField value={dir} onChange={setDir} disabled={running} />
+            <p className="mt-2 text-xs leading-relaxed text-slate-500">
+              文档以 <code className="rounded bg-slate-100 px-1">{'{文档ID}__{标题}.md'}</code> 直接写入该目录，目录不存在时自动创建。再次导入会先删除上一次写入的文件，目录里原有的其它文件不受影响。
+              {skill && <> 默认是技能的 <code className="rounded bg-slate-100 px-1">references/</code> 目录。</>}
+            </p>
+            {skill && dir.trim() && !isInside(skill.root, dir.trim()) && (
+              <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 ring-1 ring-amber-200">该目录不在技能目录（{skill.root}）内，Skill 检索不到写入的文档。</div>
+            )}
           </Step>
         )}
 
@@ -339,22 +315,10 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
           </Step>
         )}
 
-        {(method === 'api' || method === 'llm') && (
-          <Step n={method === 'llm' ? 4 : 2} title="批量导入" done={job?.status === 'done'} active={canStart}>
+        {(method === 'api' || method === 'llm' || method === 'dir') && (
+          <Step n={method === 'llm' ? 4 : method === 'dir' ? 3 : 2} title={method === 'dir' ? '写入文档' : '批量导入'} done={job?.status === 'done'} active={canStart}>
             {method === 'api' && <p className="text-xs text-slate-500">使用接入配置中的知识库 ID 与 API Key 调用 {kb?.type} 的上传接口。上传后知识库需要一段时间完成解析与向量化，再开始评测。</p>}
-            {job ? (
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs text-slate-600">
-                  <span>{job.status === 'done' ? `完成：成功 ${result?.uploaded} 篇${result?.skipped ? `（含试传 ${result.skipped} 篇）` : ''}，失败 ${result?.failed} 篇` : job.status === 'error' ? '导入失败' : job.message}</span>
-                  <span>{Math.round(job.progress * 100)}%</span>
-                </div>
-                <Progress value={job.progress} tone={job.status === 'done' ? 'emerald' : 'indigo'} />
-                {result?.errors?.slice(0, 3).map((e) => <div key={e} className="text-xs text-rose-600">{e}</div>)}
-                {job.error && <ErrorBox>{job.error}</ErrorBox>}
-              </div>
-            ) : (
-              <p className="text-xs text-slate-400">点击右下角「开始导入」。{method === 'llm' && !plan ? '请先解析上传方案。' : ''}</p>
-            )}
+            {progress ?? <p className="text-xs text-slate-400">点击右下角「{method === 'dir' ? '写入' : '开始导入'}」。{method === 'llm' && !plan ? '请先解析上传方案。' : ''}</p>}
           </Step>
         )}
 
@@ -362,8 +326,13 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
         {method === 'builtin' && <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-800 ring-1 ring-amber-200">内置演示知识库只包含固定的「星云云」演示文档，无法导入其他文档，仅适合配套的演示测评集。</div>}
         {method === 'manual' && (
           <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-700 ring-1 ring-slate-200">
-            {kb?.type} 类接入没有标准的文档上传接口，请下载文档集合后导入到它背后的知识库。
-            <div className="mt-3"><Button size="sm" disabled={!dsId} onClick={() => download(api.exportUrl(dsId, 'corpus-zip'))}><Download className="size-3.5" />下载文档集合 ZIP</Button></div>
+            {kb?.type} 类接入没有标准的文档上传接口。如果它背后的知识库会读取 / 监听某个目录，选择该目录即可把文档直接写进去；也可以下载文档集合手动导入。
+            <div className="mt-3"><DirField value={dir} onChange={setDir} disabled={running} /></div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button size="sm" variant="primary" loading={running} disabled={!dsId || !dir.trim() || running} onClick={start}><CloudUpload className="size-3.5" />写入目录</Button>
+              <Button size="sm" disabled={!dsId} onClick={() => download(api.exportUrl(dsId, 'corpus-zip'))}><Download className="size-3.5" />下载文档集合 ZIP</Button>
+            </div>
+            {progress && <div className="mt-3">{progress}</div>}
           </div>
         )}
 

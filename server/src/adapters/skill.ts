@@ -246,7 +246,7 @@ export const skillAdapter: AdapterDefinition = {
         { label: '否', value: 'no' },
         { label: '是（脚本将在服务端执行，仅用于可信技能）', value: 'yes' },
       ],
-      help: '对 Agent 调用脚本与「准备知识库」时执行上传脚本均生效',
+      help: 'Agent 模式下是否允许调用技能脚本',
     },
     { key: 'systemPrompt', label: '附加系统提示词', type: 'textarea', showIf: isAgent },
     ...llmFields(isAgent),

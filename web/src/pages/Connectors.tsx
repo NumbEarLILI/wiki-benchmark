@@ -305,7 +305,7 @@ export default function Connectors() {
                   {c.capabilities.answer && <Badge tone="green">问答</Badge>}
                   {(() => {
                     const m = adapters.data?.find((a) => a.type === c.type)?.prepare;
-                    return m === 'api' || m === 'llm' ? <Badge tone="amber">{m === 'llm' ? '大模型准备' : '可上传文档'}</Badge> : null;
+                    return m === 'api' || m === 'llm' || m === 'dir' ? <Badge tone="amber">{m === 'llm' ? '大模型准备' : m === 'dir' ? '写入目录' : '可上传文档'}</Badge> : null;
                   })()}
                 </div>
               </div>

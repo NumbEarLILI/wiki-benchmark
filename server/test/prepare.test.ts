@@ -9,6 +9,7 @@ import { demoKb } from '../src/demo/kb-store.js';
 import { closeAllMcpClients, listMcpTools, mcpAdapter } from '../src/adapters/mcp.js';
 import { skillAdapter } from '../src/adapters/skill.js';
 import { executePlan, heuristicPlanMcp, planIngest, testPlan, validatePlan, type IngestPlan } from '../src/prepare.js';
+import { ingestSkillDir, skillIngestDir, writeDocsToDir } from '../src/dir-ingest.js';
 import { evaluateRetrieval } from '../src/metrics.js';
 import { docAliases } from '../src/corpus.js';
 import type { DatasetDocument } from '../src/types.js';
@@ -29,8 +30,7 @@ const planner = http.createServer((req, res) => {
     prompts.push(user);
     let plan: unknown;
     if (user.includes('MCP 工具列表')) plan = { toolName: 'add_document', argsTemplate: { title: '{{fileName}}', content: '{{markdown}}' }, finalize: null, reasoning: 'add_document 用于新增文档' };
-    else if (user.includes('scripts/add_doc.py')) plan = { method: 'script', script: 'scripts/add_doc.py', args: ['--name', '{{fileName}}'], stdin: '{{markdown}}', reasoning: '技能提供了 add_doc.py' };
-    else plan = { method: 'files', dir: 'references', reasoning: '没有上传脚本，写入参考资料目录' };
+    else plan = {};
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '```json\n' + JSON.stringify(plan) + '\n```' } }] }));
   });
@@ -51,11 +51,7 @@ function makeSkill(withScript: boolean) {
   let body = '# Space KB\n\nAnswer questions from references/.';
   if (withScript) {
     fs.mkdirSync(path.join(root, 'scripts'));
-    fs.writeFileSync(
-      path.join(root, 'scripts', 'add_doc.py'),
-      'import sys, os\nname = sys.argv[sys.argv.index("--name") + 1]\nos.makedirs("../references/uploads", exist_ok=True)\nopen(os.path.join("../references/uploads", name), "w").write(sys.stdin.read())\nprint("saved", name)\n',
-    );
-    body += '\n\n## Adding documents\nRun `python3 scripts/add_doc.py --name <file name>` and pipe the markdown body via stdin.';
+    fs.writeFileSync(path.join(root, 'scripts', 'tool.py'), 'print(1)\n');
   }
   fs.writeFileSync(path.join(root, 'SKILL.md'), `---\nname: space-kb\ndescription: Space knowledge base\n---\n${body}\n`);
   return root;
@@ -123,43 +119,42 @@ describe('MCP preparation', () => {
   });
 });
 
-describe('Skill preparation', () => {
-  it('runs the upload script described by the skill', async () => {
-    const root = makeSkill(true);
-    const config = { skillPath: root, mode: 'retrieval', allowScripts: 'yes', llmBaseUrl: llmUrl, llmModel: 'planner' };
-    const { plan } = await planIngest('skill', config, docs[0]);
-    expect(plan).toMatchObject({ kind: 'skill-script', script: 'scripts/add_doc.py', source: 'llm' });
-    expect(prompts.at(-1)).toContain('add_doc.py --name');
-    expect(await testPlan('skill', config, plan, docs[0])).toContain('saved Q101__Lunar regolith.md');
-    const r = await executePlan('skill', config, plan, docs, {});
+describe('Skill preparation: write documents into a folder', () => {
+  it('writes into references/ by default so the skill can search them', async () => {
+    const root = makeSkill(false);
+    const config = { skillPath: root, mode: 'retrieval' };
+    expect(skillIngestDir(config)).toBe(path.join(fs.realpathSync(root), 'references'));
+    const r = await ingestSkillDir(config, docs, {});
     expect(r.uploaded).toBe(3);
-    expect(fs.readFileSync(path.join(root, 'references/uploads/Q102__Martian dust storms.md'), 'utf8')).toContain('# Martian dust storms');
+    expect(fs.readFileSync(path.join(root, 'references/Q102__Martian dust storms.md'), 'utf8')).toContain('# Martian dust storms');
     expect(await hits(() => skillAdapter.query(config, 'Mars dust storms block sunlight', { topK: 3 }), 'Q102')).toBe(1);
   });
 
-  it('refuses to run scripts unless allowed', async () => {
+  it('uses the chosen folder and only replaces files it wrote before', async () => {
     const root = makeSkill(true);
-    const plan: IngestPlan = { kind: 'skill-script', script: 'scripts/add_doc.py', argsTemplate: '["--name", "{{fileName}}"]', stdinTemplate: '{{markdown}}', reasoning: '', source: 'manual' };
-    const r = await executePlan('skill', { skillPath: root, allowScripts: 'no' }, plan, docs.slice(0, 1), {});
-    expect(r.errors[0]).toMatch(/允许执行技能脚本/);
-  });
-
-  it('writes documents into the references folder and replaces the previous batch', async () => {
-    const root = makeSkill(false);
-    const config = { skillPath: root, mode: 'retrieval', llmBaseUrl: llmUrl, llmModel: 'planner' };
-    const { plan } = await planIngest('skill', config, docs[0]);
-    expect(plan).toMatchObject({ kind: 'skill-files', dir: 'references' });
-    await executePlan('skill', config, plan, docs.slice(0, 2), {});
+    const target = path.join(root, 'references', 'bench');
+    const config = { skillPath: root, mode: 'retrieval', ingestDir: target };
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'mine.md'), 'keep me');
+    await ingestSkillDir(config, docs.slice(0, 2), {});
     expect(await hits(() => skillAdapter.query(config, 'helium-3 solar wind regolith', { topK: 3 }), 'Q101')).toBe(1);
-    await executePlan('skill', config, plan, docs.slice(2), {});
-    expect(fs.readdirSync(path.join(root, 'references/kb-bench'))).toEqual(['Q103__Europa ocean.md']);
+    await ingestSkillDir(config, docs.slice(2), {});
+    expect(fs.readdirSync(target).filter((f) => !f.startsWith('.')).sort()).toEqual(['Q103__Europa ocean.md', 'mine.md']);
     expect(fs.existsSync(path.join(root, 'references/intro.md'))).toBe(true);
   });
 
-  it('rejects plans of the wrong kind or with path traversal', async () => {
-    expect(() => validatePlan('mcp', { kind: 'skill-files', reasoning: '', source: 'manual' })).toThrow();
-    const root = makeSkill(false);
-    const r = await executePlan('skill', { skillPath: root }, { kind: 'skill-files', dir: '../../etc', reasoning: '', source: 'manual' }, docs.slice(0, 1), {}).catch((e) => e);
-    expect(String(r.message ?? r.errors?.[0])).toMatch(/路径越界/);
+  it('writes into any folder, creating it when missing', async () => {
+    const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'prep-out-')), 'nested', 'docs');
+    const r = await writeDocsToDir(out, docs, {});
+    expect(r).toEqual({ uploaded: 3, failed: 0, errors: [] });
+    expect(fs.readdirSync(out).filter((f) => !f.startsWith('.')).length).toBe(3);
+    const file = path.join(path.dirname(out), 'file.txt');
+    fs.writeFileSync(file, 'x');
+    await expect(writeDocsToDir(file, docs)).rejects.toThrow(/不是目录/);
+  });
+
+  it('only MCP connectors use LLM plans', async () => {
+    expect(() => validatePlan('skill', { kind: 'mcp-tool', toolName: 'x', reasoning: '', source: 'manual' })).toThrow();
+    await expect(planIngest('skill', {}, docs[0])).rejects.toThrow(/只有 MCP/);
   });
 });

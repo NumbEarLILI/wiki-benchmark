@@ -9,6 +9,7 @@ import { skillAdapter } from './skill.js';
 import { localBm25Adapter } from './local-bm25.js';
 import { str } from './http.js';
 import { ingestWithPlan } from '../prepare.js';
+import { ingestSkillDir } from '../dir-ingest.js';
 
 mockAdapter.resolveCapabilities = (c) => ({ retrieval: true, answer: str(c.answerMode, 'extractive') !== 'none' });
 difyAdapter.resolveCapabilities = (c) => ({ retrieval: true, answer: str(c.mode, 'chat') === 'chat' });
@@ -17,11 +18,11 @@ fastgptAdapter.resolveCapabilities = (c) => ({ retrieval: true, answer: str(c.mo
 openaiAdapter.resolveCapabilities = (c) => ({ retrieval: !!str(c.contextsPath), answer: true });
 customHttpAdapter.resolveCapabilities = (c) => ({ retrieval: !!str(c.contextsPath), answer: !!str(c.answerPath) });
 mcpAdapter.ingest = (c, docs, opts) => ingestWithPlan('mcp', c, docs, opts);
-skillAdapter.ingest = (c, docs, opts) => ingestWithPlan('skill', c, docs, opts);
+skillAdapter.ingest = ingestSkillDir;
 
 /** 准备知识库的方式：api 直接调用上传接口；llm 由大模型解析 MCP / Skill 接口生成上传方案；none 无需准备；builtin 内置固定语料；manual 需手动导入 */
-export type PrepareMethod = 'api' | 'llm' | 'none' | 'builtin' | 'manual';
-const PREPARE: Record<string, PrepareMethod> = { dify: 'api', ragflow: 'api', fastgpt: 'api', mcp: 'llm', skill: 'llm', 'local-bm25': 'none', mock: 'builtin' };
+export type PrepareMethod = 'api' | 'llm' | 'dir' | 'none' | 'builtin' | 'manual';
+const PREPARE: Record<string, PrepareMethod> = { dify: 'api', ragflow: 'api', fastgpt: 'api', mcp: 'llm', skill: 'dir', 'local-bm25': 'none', mock: 'builtin' };
 export const prepareMethodOf = (type: string): PrepareMethod => PREPARE[type] ?? 'manual';
 
 export const adapters: AdapterDefinition[] = [

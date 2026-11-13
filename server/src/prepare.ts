@@ -1,29 +1,19 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import type { DatasetDocument, IngestResult } from './types.js';
 import { requestJson, renderTemplate, str, trimSlash } from './adapters/http.js';
 import { callMcpTool, listMcpTools, type McpToolInfo } from './adapters/mcp.js';
-import { execSkillScript, invalidateSkillCache, loadSkills, safeJoin } from './adapters/skill.js';
 import { ingestEach } from './adapters/ingest.js';
 import { resolveLlm } from './agent.js';
 import { docFileName, docMarkdown } from './corpus.js';
 
 /**
- * 文档上传方案：由大模型阅读 MCP 工具列表或 Skill 说明后生成，执行时按模板逐篇调用，
+ * MCP 文档上传方案：由大模型阅读 MCP 工具列表后生成，执行时按模板逐篇调用，
  * 不再每篇文档都询问大模型，既省成本又保证结果确定。
  */
 export interface IngestPlan {
-  kind: 'mcp-tool' | 'skill-script' | 'skill-files';
-  /** mcp-tool：上传工具名 */
-  toolName?: string;
-  /** skill-script：脚本相对路径 */
-  script?: string;
-  /** mcp-tool 为参数对象模板；skill-script 为命令行参数数组模板（JSON 字符串） */
+  kind: 'mcp-tool';
+  toolName: string;
+  /** 参数对象模板（JSON 字符串） */
   argsTemplate?: string;
-  /** skill-script：标准输入模板 */
-  stdinTemplate?: string;
-  /** skill-files：写入的目录（相对技能根目录） */
-  dir?: string;
   /** 全部上传后调用一次，例如触发重建索引 */
   finalize?: { toolName: string; argsTemplate: string };
   reasoning: string;
@@ -39,8 +29,6 @@ export const DOC_VARS: Record<string, string> = {
   url: '原文链接（可能为空）',
 };
 
-export const FILES_SUBDIR = 'kb-bench';
-
 export function docVars(doc: DatasetDocument): Record<string, string> {
   return { id: doc.id, title: doc.title, fileName: docFileName(doc), content: doc.content, markdown: docMarkdown(doc), url: doc.url ?? '' };
 }
@@ -54,24 +42,18 @@ function renderJson<T>(tpl: string, vars: Record<string, string>): T {
   }
 }
 
+/** 早期版本保存过 Skill 的上传方案，这些方案不再使用 */
 export function parsePlan(v: unknown): IngestPlan | undefined {
   if (!v) return undefined;
   const p = (typeof v === 'string' ? JSON.parse(v) : v) as IngestPlan;
-  return p?.kind ? p : undefined;
+  return p?.kind === 'mcp-tool' ? p : undefined;
 }
 
 export function validatePlan(type: string, p: IngestPlan) {
-  if (type === 'mcp' && p.kind !== 'mcp-tool') throw new Error('MCP 接入的上传方案必须是 mcp-tool');
-  if (type === 'skill' && p.kind === 'mcp-tool') throw new Error('Skill 接入的上传方案必须是 skill-script 或 skill-files');
-  if (p.kind === 'mcp-tool') {
-    if (!p.toolName) throw new Error('上传方案缺少工具名称');
-    renderJson(p.argsTemplate || '{}', docVars({ id: 'x', title: 'x', content: 'x' }));
-  }
-  if (p.kind === 'skill-script') {
-    if (!p.script) throw new Error('上传方案缺少脚本路径');
-    const argv = renderJson<unknown>(p.argsTemplate || '[]', docVars({ id: 'x', title: 'x', content: 'x' }));
-    if (!Array.isArray(argv)) throw new Error('脚本参数模板必须是 JSON 数组');
-  }
+  if (type !== 'mcp') throw new Error('只有 MCP 接入使用上传方案');
+  if (p.kind !== 'mcp-tool') throw new Error('MCP 接入的上传方案必须是 mcp-tool');
+  if (!p.toolName) throw new Error('上传方案缺少工具名称');
+  renderJson(p.argsTemplate || '{}', docVars({ id: 'x', title: 'x', content: 'x' }));
 }
 
 // ---------- 大模型解析 ----------
@@ -122,35 +104,6 @@ async function llmPlanMcp(config: Record<string, unknown>, tools: McpToolInfo[],
   return { kind: 'mcp-tool', toolName, argsTemplate: asTemplate(out.argsTemplate, '{}'), finalize, reasoning: str(out.reasoning), source: 'llm' };
 }
 
-function skillContext(skillPath: string) {
-  const s = loadSkills(skillPath);
-  const scripts = s.files.filter((f) => /\.(py|js|mjs|sh)$/i.test(f)).slice(0, 5);
-  const scriptText = scripts
-    .map((f) => {
-      const text = fs.readFileSync(path.join(s.root, f), 'utf8').split('\n').slice(0, 80).join('\n');
-      return `### ${f}\n\`\`\`\n${text}\n\`\`\``;
-    })
-    .join('\n\n');
-  const skillText = s.skills.map((k) => `### ${k.name}（目录 ${k.dir || '.'}）\n${k.description}\n\n${k.body.slice(0, 4000)}`).join('\n\n');
-  return { s, scripts, text: `## 技能说明\n${skillText}\n\n## 文件列表\n${s.files.slice(0, 200).join('\n')}\n\n## 脚本内容（节选）\n${scriptText || '（无脚本）'}` };
-}
-
-async function llmPlanSkill(config: Record<string, unknown>, doc: DatasetDocument, signal?: AbortSignal): Promise<IngestPlan> {
-  const ctx = skillContext(str(config.skillPath));
-  const out = await askLlm(
-    config,
-    '你是知识库集成工程师。你会阅读一个 Agent Skill（SKILL.md、文件列表与脚本），判断如何把一批评测文档加入这个技能所代表的知识库：如果技能提供了添加 / 上传 / 导入文档的脚本，就给出逐篇调用该脚本的命令行参数模板；否则把文档以 Markdown 文件写入技能的参考资料目录。',
-    `${ctx.text}\n\n## 示例文档（占位符取值）\n${sample(doc)}\n\n${PLAN_RULES}\n\n输出格式：{"method": "script" 或 "files", "script": "脚本相对路径（method=script）", "args": ["命令行参数数组模板"], "stdin": "标准输入模板，不需要则为 null", "dir": "写入目录（method=files，通常是参考资料目录如 references）", "reasoning": "用中文简要说明判断依据"}`,
-    signal,
-  );
-  if (out.method === 'script') {
-    const script = str(out.script);
-    if (!ctx.scripts.includes(script) && !ctx.s.files.includes(script)) throw new Error(`大模型选择的脚本不存在：${script}`);
-    return { kind: 'skill-script', script, argsTemplate: asTemplate(out.args, '[]'), stdinTemplate: out.stdin ? String(out.stdin) : undefined, reasoning: str(out.reasoning), source: 'llm' };
-  }
-  return { kind: 'skill-files', dir: str(out.dir, 'references').replace(/^\/+|\/+$/g, ''), reasoning: str(out.reasoning), source: 'llm' };
-}
-
 // ---------- 规则识别（未配置大模型或调用失败时） ----------
 const WRITE_TOOL = /(add|upload|create|insert|ingest|import|write|put|save|upsert|index|store|新增|添加|上传|导入)/i;
 const CONTENT_KEY = /^(content|text|body|markdown|md|document|data|page_content|正文|内容)$/i;
@@ -171,59 +124,27 @@ export function heuristicPlanMcp(tools: McpToolInfo[]): IngestPlan {
   return { kind: 'mcp-tool', toolName: tool.name, argsTemplate: JSON.stringify(args), reasoning: `按名称与参数规则识别出写入工具 ${tool.name}`, source: 'heuristic' };
 }
 
-function heuristicPlanSkill(): IngestPlan {
-  return { kind: 'skill-files', dir: 'references', reasoning: '把文档以 Markdown 文件写入技能的 references/ 目录，Skill 检索与 Agent 读取时都能用到', source: 'heuristic' };
-}
-
 export async function planIngest(type: string, config: Record<string, unknown>, doc: DatasetDocument, signal?: AbortSignal): Promise<{ plan: IngestPlan; note?: string }> {
-  if (type !== 'mcp' && type !== 'skill') throw new Error('只有 MCP 与 Skill 接入需要解析上传方案');
-  const tools = type === 'mcp' ? await listMcpTools(config, 0) : [];
-  if (type === 'skill') skillContext(str(config.skillPath));
+  if (type !== 'mcp') throw new Error('只有 MCP 接入需要解析上传方案');
+  const tools = await listMcpTools(config, 0);
   try {
-    return { plan: type === 'mcp' ? await llmPlanMcp(config, tools, doc, signal) : await llmPlanSkill(config, doc, signal) };
+    return { plan: await llmPlanMcp(config, tools, doc, signal) };
   } catch (e) {
-    const plan = type === 'mcp' ? heuristicPlanMcp(tools) : heuristicPlanSkill();
+    const plan = heuristicPlanMcp(tools);
     return { plan, note: `大模型解析失败（${(e as Error).message}），已改用规则识别，请确认方案是否正确` };
   }
 }
 
 // ---------- 执行 ----------
-async function uploadOne(type: string, config: Record<string, unknown>, plan: IngestPlan, doc: DatasetDocument, signal?: AbortSignal): Promise<string> {
-  const vars = docVars(doc);
-  if (plan.kind === 'mcp-tool') {
-    const res = await callMcpTool(config, plan.toolName!, renderJson(plan.argsTemplate || '{}', vars), signal);
-    return res.text;
-  }
-  const root = loadSkills(str(config.skillPath)).root;
-  if (plan.kind === 'skill-script') {
-    if (str(config.allowScripts) !== 'yes') throw new Error('该 Skill 未允许执行脚本，请在接入配置中把「允许执行技能脚本」设为「是」');
-    const argv = renderJson<unknown[]>(plan.argsTemplate || '[]', vars).map(String);
-    const stdin = plan.stdinTemplate ? fillPlain(plan.stdinTemplate, vars) : undefined;
-    const r = await execSkillScript(root, plan.script!, argv, stdin, signal);
-    if (r.code !== 0) throw new Error(`脚本退出码 ${r.code}：${(r.stderr || r.stdout).slice(0, 300)}`);
-    return r.stdout.trim();
-  }
-  const dir = filesDir(root, plan);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, vars.fileName), vars.markdown);
-  return path.relative(root, path.join(dir, vars.fileName));
-}
-
-/** 标准输入是纯文本而非 JSON 字符串，占位符直接替换为原值 */
-function fillPlain(tpl: string, vars: Record<string, string>) {
-  return tpl.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => vars[k] ?? '');
-}
-
-function filesDir(root: string, plan: IngestPlan) {
-  return path.join(safeJoin(root, plan.dir ?? 'references'), FILES_SUBDIR);
+async function uploadOne(config: Record<string, unknown>, plan: IngestPlan, doc: DatasetDocument, signal?: AbortSignal): Promise<string> {
+  const res = await callMcpTool(config, plan.toolName, renderJson(plan.argsTemplate || '{}', docVars(doc)), signal);
+  return res.text;
 }
 
 /** 试传第一篇，返回接口输出，便于确认方案 */
 export async function testPlan(type: string, config: Record<string, unknown>, plan: IngestPlan, doc: DatasetDocument, signal?: AbortSignal) {
   validatePlan(type, plan);
-  const output = await uploadOne(type, config, plan, doc, signal);
-  if (plan.kind === 'skill-files') invalidateSkillCache(str(config.skillPath));
-  return output;
+  return uploadOne(config, plan, doc, signal);
 }
 
 export async function executePlan(
@@ -231,14 +152,11 @@ export async function executePlan(
   config: Record<string, unknown>,
   plan: IngestPlan,
   documents: DatasetDocument[],
-  opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void; fresh?: boolean },
+  opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
 ): Promise<IngestResult> {
   validatePlan(type, plan);
-  if (plan.kind === 'skill-files' && opts.fresh !== false) {
-    fs.rmSync(filesDir(loadSkills(str(config.skillPath)).root, plan), { recursive: true, force: true });
-  }
-  const result = await ingestEach(documents, { ...opts, concurrency: plan.kind === 'skill-script' ? 2 : 3 }, async (doc) => {
-    await uploadOne(type, config, plan, doc, opts.signal);
+  const result = await ingestEach(documents, { ...opts, concurrency: 3 }, async (doc) => {
+    await uploadOne(config, plan, doc, opts.signal);
   });
   if (plan.finalize && result.uploaded) {
     try {
@@ -247,7 +165,6 @@ export async function executePlan(
       result.errors.push(`收尾调用 ${plan.finalize.toolName} 失败：${(e as Error).message}`);
     }
   }
-  if (type === 'skill') invalidateSkillCache(str(config.skillPath));
   return result;
 }
 

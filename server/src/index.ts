@@ -17,6 +17,7 @@ import { getJob, startJob } from './jobs.js';
 import { docFileName, docMarkdown, skillFiles, writeSkillDir } from './corpus.js';
 import { createZip } from './zip.js';
 import { browseDir, skillTree } from './fs-browse.js';
+import { skillIngestDir, writeDocsToDir } from './dir-ingest.js';
 
 import { closeAllMcpClients, listMcpTools } from './adapters/mcp.js';
 import { handleDemoMcp } from './demo/mcp-server.js';
@@ -360,8 +361,7 @@ app.post('/api/datasets/:id/skill', (req, res) => {
 
 function planLabel(p?: IngestPlan) {
   if (!p) return undefined;
-  const how = p.kind === 'mcp-tool' ? `MCP 工具 ${p.toolName}` : p.kind === 'skill-script' ? `技能脚本 ${p.script}` : `写入技能目录 ${p.dir ?? 'references'}/`;
-  return `${how}（${{ llm: '大模型解析', heuristic: '规则识别', manual: '手动配置' }[p.source]}）`;
+  return `MCP 工具 ${p.toolName}（${{ llm: '大模型解析', heuristic: '规则识别', manual: '手动配置' }[p.source]}）`;
 }
 
 function prepContext(body: any) {
@@ -417,12 +417,12 @@ app.post(
   }),
 );
 
-/** 技能目录内的子目录与脚本，供上传方案在网页上选择 */
+/** Skill 的技能目录与当前的文档写入目录 */
 app.post('/api/prepare/skill-tree', (req, res) => {
   const { c } = prepContext(req.body);
   if (c.type !== 'skill') throw new ApiError(400, '只有 Skill 接入有技能目录');
   try {
-    res.json(skillTree(String(c.config.skillPath ?? '')));
+    res.json({ ...skillTree(String(c.config.skillPath ?? '')), ingestDir: skillIngestDir(c.config) });
   } catch (e) {
     throw new ApiError(400, (e as Error).message);
   }
@@ -447,31 +447,34 @@ app.post('/api/datasets/:id/sync', (req, res) => {
   const c = db.connectors.find((x) => x.id === req.body?.connectorId);
   if (!c) throw new ApiError(404, '知识库不存在');
   const adapter = getAdapter(c.type);
-  if (!adapter.ingest) throw new ApiError(400, `${adapter.name} 不支持自动导入文档，请导出文档集合后手动上传`);
+  const dir = typeof req.body?.dir === 'string' && req.body.dir.trim() ? path.resolve(req.body.dir.trim()) : undefined;
+  if (!adapter.ingest && !dir) throw new ApiError(400, `${adapter.name} 不支持自动导入文档，请选择一个目录写入文档，或导出文档集合后手动上传`);
   if (!d.documents?.length) throw new ApiError(400, '该测评集没有文档集合');
   const plan = bodyPlan(c.type, req.body?.plan);
-  if (plan) {
-    c.config = { ...c.config, ingestPlan: JSON.stringify(plan) };
+  if (plan || dir) {
+    c.config = { ...c.config, ...(plan ? { ingestPlan: JSON.stringify(plan) } : {}), ...(dir ? { ingestDir: dir } : {}) };
     c.updatedAt = now();
     save();
   }
   const current = parsePlan(c.config.ingestPlan);
-  const skip = new Set<string>(current?.kind === 'skill-files' || !Array.isArray(req.body?.skip) ? [] : req.body.skip.map(String));
+  const toDir = dir ?? (c.type === 'skill' ? skillIngestDir(c.config) : undefined);
+  const skip = new Set<string>(toDir || !Array.isArray(req.body?.skip) ? [] : req.body.skip.map(String));
   const docs = d.documents.filter((doc) => !skip.has(doc.id));
   const total = d.documents.length;
   const job = startJob('sync', `准备「${c.name}」：导入「${d.name}」的文档`, async (report) => {
-    if (!current && prepareMethodOf(c.type) === 'llm') {
+    if (!current && !toDir && prepareMethodOf(c.type) === 'llm') {
       report(0, '大模型正在解析上传接口…');
       const { plan: auto } = await planIngest(c.type, c.config, docs[0]);
       c.config = { ...c.config, ingestPlan: JSON.stringify(auto) };
       save();
     }
-    report(0, `准备上传 ${docs.length} 篇文档…`);
-    const r = await adapter.ingest!(c.config, docs, { onProgress: (done, n) => report(done / n, `已上传 ${done} / ${n}`) });
+    report(0, toDir ? `写入目录 ${toDir}…` : `准备上传 ${docs.length} 篇文档…`);
+    const onProgress = (done: number, n: number) => report(done / n, `${toDir ? '已写入' : '已上传'} ${done} / ${n}`);
+    const r = adapter.ingest && (c.type === 'skill' || !dir) ? await adapter.ingest(c.config, docs, { onProgress }) : await writeDocsToDir(toDir!, docs, { onProgress });
     const used = parsePlan(c.config.ingestPlan);
     d.syncs = [
       ...(d.syncs ?? []).filter((s) => s.connectorId !== c.id),
-      { connectorId: c.id, connectorName: c.name, at: now(), uploaded: r.uploaded + (total - docs.length), failed: r.failed, detail: planLabel(used) ?? `${adapter.name} 上传接口` },
+      { connectorId: c.id, connectorName: c.name, at: now(), uploaded: r.uploaded + (total - docs.length), failed: r.failed, detail: toDir ? `写入目录 ${toDir}` : (planLabel(used) ?? `${adapter.name} 上传接口`) },
     ];
     save();
     if (!r.uploaded && r.failed) throw new Error(r.errors[0] ?? '全部上传失败');

@@ -62,7 +62,7 @@ export const api = {
   deleteDocument: (id: string, docId: string) => req('DELETE', `/api/datasets/${id}/documents/${encodeURIComponent(docId)}`),
   exportUrl: (id: string, format: 'json' | 'corpus-zip' | 'skill-zip') => `/api/datasets/${id}/export?format=${format}`,
   createSkill: (id: string, body: { createConnector: boolean; mode?: 'retrieval' | 'agent' }) => req<{ path: string; connector?: Connector }>('POST', `/api/datasets/${id}/skill`, body),
-  syncDataset: (id: string, body: { connectorId: string; plan?: IngestPlan; skip?: string[] }) => req<Job>('POST', `/api/datasets/${id}/sync`, body),
+  syncDataset: (id: string, body: { connectorId: string; plan?: IngestPlan; skip?: string[]; dir?: string }) => req<Job>('POST', `/api/datasets/${id}/sync`, body),
   preparePlan: (connectorId: string, datasetId?: string) => req<{ plan: IngestPlan; note?: string }>('POST', '/api/prepare/plan', { connectorId, datasetId }),
   prepareTest: (connectorId: string, datasetId: string, plan: IngestPlan) => req<PrepareTestResult>('POST', '/api/prepare/test', { connectorId, datasetId, plan }),
   skillTree: (connectorId: string) => req<SkillTree>('POST', '/api/prepare/skill-tree', { connectorId }),
