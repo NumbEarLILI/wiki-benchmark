@@ -271,7 +271,7 @@ export function PrepareModal({ open, onClose, datasetId, connectorId, onDone }: 
           </div>
           {record && (
             <div className="mt-2 text-xs text-emerald-700">
-              <CheckCircle2 className="mr-1 inline size-3.5" />{fmtTime(record.at)} 已准备：成功 {record.uploaded} 篇{record.failed ? `，失败 ${record.failed} 篇` : ''}{record.detail ? ` · ${record.detail}` : ''}。重新导入可能产生重复文档。
+              <CheckCircle2 className="mr-1 inline size-3.5" />{fmtTime(record.at)} 已准备：成功 {record.uploaded} 篇{record.failed ? `，失败 ${record.failed} 篇` : ''}{record.detail ? ` · ${record.detail}` : ''}。{method === 'api' || method === 'llm' ? '重新导入可能产生重复文档。' : '再次写入会替换上一批文件。'}
             </div>
           )}
         </Step>
